@@ -7,8 +7,12 @@ import {
   RefreshCw,
   Check,
   X,
+  Clock,
+  FileSpreadsheet,
+  Lock,
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import { exportToCsv } from '../utils/exportCsv';
 
 const statusLabels: Record<string, string> = {
   DETECTED: 'Détectée',
@@ -47,10 +51,44 @@ export const AnomaliesPage: React.FC = () => {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
+  const [activeTab, setActiveTab] = useState<'anomalies' | 'audit'>('anomalies');
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
   // Modal résolution
   const [selectedAnomaly, setSelectedAnomaly] = useState<any | null>(null);
   const [resolutionNote, setResolutionNote] = useState('');
   const [submittingResolve, setSubmittingResolve] = useState(false);
+
+  const loadAuditLogs = async () => {
+    try {
+      setAuditLoading(true);
+      setAuditError(null);
+      const res = await ApiClient.getAuditLogs();
+      setAuditLogs(res);
+    } catch (err: any) {
+      setAuditError(err.message || 'Impossible de charger le journal d’audit.');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const handleExportAuditCsv = () => {
+    if (!auditLogs.length) return;
+    const rows = auditLogs.map((log) => ({
+      'Date & Heure': new Date(log.createdAt).toLocaleString('fr-FR'),
+      'Utilisateur': log.user ? `${log.user.firstName} ${log.user.lastName}` : 'Système',
+      'Rôle': log.user?.role || 'SYSTEM',
+      'Action': log.action,
+      'Entité': log.entity,
+      'Identifiant Cible': log.entityId,
+      'Adresse IP': log.ipAddress || '—',
+      'Détails': log.newValues ? JSON.stringify(log.newValues) : (log.oldValues ? JSON.stringify(log.oldValues) : '—'),
+    }));
+    exportToCsv('Journal_Audit_Securite_SmartPME', rows);
+    success('Journal d’audit de sécurité exporté avec succès !');
+  };
 
   const loadAnomalies = async () => {
     try {
@@ -127,65 +165,182 @@ export const AnomaliesPage: React.FC = () => {
 
   return (
     <div>
-      {/* KPIs */}
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: '20px' }}>
-        <div className="kpi-card" style={{ borderTop: '3px solid #DC2626' }}>
-          <div className="kpi-label">Critiques</div>
-          <div className="kpi-value" style={{ color: criticalCount > 0 ? '#DC2626' : '#111827' }}>{criticalCount}</div>
-          <div className="kpi-sub">Action immédiate requise</div>
-        </div>
-        <div className="kpi-card" style={{ borderTop: '3px solid #D97706' }}>
-          <div className="kpi-label">Élevées</div>
-          <div className="kpi-value" style={{ color: highCount > 0 ? '#D97706' : '#111827' }}>{highCount}</div>
-          <div className="kpi-sub">Écarts & remises anormales</div>
-        </div>
-        <div className="kpi-card" style={{ borderTop: '3px solid #2563EB' }}>
-          <div className="kpi-label">Total actives</div>
-          <div className="kpi-value">{totalActive}</div>
-          <div className="kpi-sub">À examiner</div>
-        </div>
-        <div className="kpi-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'stretch' }}>
-          <button
-            type="button"
-            onClick={handleScan}
-            disabled={scanning}
-            className="btn btn-primary"
-            style={{ width: '100%' }}
-          >
-            {scanning ? (
-              <>
-                <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px', borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
-                Analyse en cours...
-              </>
-            ) : (
-              <>
-                <RefreshCw size={14} />
-                Lancer le scan des règles
-              </>
-            )}
-          </button>
-          {scanResult && (
-            <div style={{ fontSize: '0.6875rem', color: '#16A34A', marginTop: '6px', textAlign: 'center' }}>{scanResult}</div>
-          )}
-        </div>
-      </div>
-
-      {/* Filtres par statut */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        {filterOptions.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            className={`btn btn-sm ${statusFilter === opt.value ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setStatusFilter(opt.value)}
-          >
-            {opt.label}
-          </button>
-        ))}
-        <button type="button" className="btn btn-sm btn-secondary" onClick={loadAnomalies} style={{ marginLeft: 'auto' }}>
-          <RefreshCw size={12} /> Actualiser
+      {/* Sélecteur d'onglets : Anomalies vs Journal d'Audit */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid #E2E8F0', paddingBottom: '12px' }}>
+        <button
+          type="button"
+          className={`btn ${activeTab === 'anomalies' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setActiveTab('anomalies')}
+        >
+          <ShieldAlert size={14} /> Alertes d'Anomalies ({anomalies.length})
+        </button>
+        <button
+          type="button"
+          className={`btn ${activeTab === 'audit' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => {
+            setActiveTab('audit');
+            loadAuditLogs();
+          }}
+        >
+          <Clock size={14} /> Journal d'Audit & Sécurité {auditLogs.length > 0 ? `(${auditLogs.length})` : ''}
         </button>
       </div>
+
+      {activeTab === 'audit' ? (
+        <div className="table-wrapper">
+          <div className="table-toolbar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Lock size={16} color="#2563EB" />
+              <span style={{ fontWeight: 600, color: '#1E293B', fontSize: '0.95rem' }}>
+                Piste d’Audit Immuable & Traçabilité des Opérations
+              </span>
+            </div>
+            <div className="table-toolbar-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportAuditCsv}
+                title="Exporter le journal d'audit vers Excel / CSV"
+              >
+                <FileSpreadsheet size={13} /> Exporter Audit (Excel)
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={loadAuditLogs}
+                disabled={auditLoading}
+              >
+                <RefreshCw size={13} className={auditLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+          </div>
+
+          <div className="table-container">
+            {auditLoading ? (
+              <div className="loading-state">
+                <div className="spinner" />
+                <span>Chargement de la piste d'audit...</span>
+              </div>
+            ) : auditError ? (
+              <div className="table-empty">
+                <div className="table-empty-title" style={{ color: '#DC2626' }}>Erreur</div>
+                <div className="table-empty-sub">{auditError}</div>
+              </div>
+            ) : auditLogs.length === 0 ? (
+              <div className="table-empty">
+                <CheckCircle size={32} color="#16A34A" style={{ marginBottom: '8px' }} />
+                <div className="table-empty-title">Journal d'audit vierge</div>
+                <div className="table-empty-sub">Toutes les actions sensibles (annulations de factures, verrouillages de postes, modifications de taux) seront consignées ici automatiquement.</div>
+              </div>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Date & Heure</th>
+                    <th>Opérateur</th>
+                    <th>Rôle</th>
+                    <th>Action</th>
+                    <th>Entité Cible</th>
+                    <th>Adresse IP</th>
+                    <th>Détails de l'opération</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                        {new Date(log.createdAt).toLocaleString('fr-FR')}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>
+                        {log.user ? `${log.user.firstName} ${log.user.lastName}` : 'Système'}
+                      </td>
+                      <td>
+                        <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
+                          {log.user?.role || 'SYSTEM'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="badge badge-info" style={{ fontWeight: 600 }}>
+                          {log.action}
+                        </span>
+                      </td>
+                      <td style={{ fontSize: '0.8rem', color: '#64748B' }}>
+                        {log.entity} {log.entityId ? `#${log.entityId.slice(0, 8)}` : ''}
+                      </td>
+                      <td style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#6B7280' }}>
+                        {log.ipAddress || '127.0.0.1'}
+                      </td>
+                      <td style={{ fontSize: '0.75rem', color: '#334155', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.newValues ? JSON.stringify(log.newValues) : (log.oldValues ? JSON.stringify(log.oldValues) : '—')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* KPIs */}
+          <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: '20px' }}>
+            <div className="kpi-card" style={{ borderTop: '3px solid #DC2626' }}>
+              <div className="kpi-label">Critiques</div>
+              <div className="kpi-value" style={{ color: criticalCount > 0 ? '#DC2626' : '#111827' }}>{criticalCount}</div>
+              <div className="kpi-sub">Action immédiate requise</div>
+            </div>
+            <div className="kpi-card" style={{ borderTop: '3px solid #D97706' }}>
+              <div className="kpi-label">Élevées</div>
+              <div className="kpi-value" style={{ color: highCount > 0 ? '#D97706' : '#111827' }}>{highCount}</div>
+              <div className="kpi-sub">Écarts & remises anormales</div>
+            </div>
+            <div className="kpi-card" style={{ borderTop: '3px solid #2563EB' }}>
+              <div className="kpi-label">Total actives</div>
+              <div className="kpi-value">{totalActive}</div>
+              <div className="kpi-sub">À examiner</div>
+            </div>
+            <div className="kpi-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'stretch' }}>
+              <button
+                type="button"
+                onClick={handleScan}
+                disabled={scanning}
+                className="btn btn-primary"
+                style={{ width: '100%' }}
+              >
+                {scanning ? (
+                  <>
+                    <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px', borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
+                    Analyse en cours...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={14} />
+                    Lancer le scan des règles
+                  </>
+                )}
+              </button>
+              {scanResult && (
+                <div style={{ fontSize: '0.6875rem', color: '#16A34A', marginTop: '6px', textAlign: 'center' }}>{scanResult}</div>
+              )}
+            </div>
+          </div>
+
+          {/* Filtres par statut */}
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            {filterOptions.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`btn btn-sm ${statusFilter === opt.value ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setStatusFilter(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <button type="button" className="btn btn-sm btn-secondary" onClick={loadAnomalies} style={{ marginLeft: 'auto' }}>
+              <RefreshCw size={12} /> Actualiser
+            </button>
+          </div>
 
       {/* Liste anomalies */}
       {loading ? (
@@ -318,6 +473,8 @@ export const AnomaliesPage: React.FC = () => {
           })}
         </div>
       )}
+    </>
+  )}
 
       {/* Modal résolution */}
       {selectedAnomaly && (

@@ -1008,7 +1008,7 @@ export const SalesPage: React.FC = () => {
                     'Facture Rattachée': s.invoice?.invoiceNumber || '—',
                     'Statut': statusLabel[s.status] || s.status,
                   }));
-                  exportToCsv('Journal_Ventes_OpenPME', rows);
+                  exportToCsv('Journal_Ventes_SmartPME', rows);
                   success('Journal des ventes exporté en CSV/Excel avec succès !');
                 }}
                 title="Exporter le journal des ventes vers Excel/CSV"
@@ -1128,7 +1128,7 @@ export const SalesPage: React.FC = () => {
               {/* QR Code Fiscal du Reçu */}
               <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'center' }}>
                 <QRCodeDisplay
-                  value={`OPENPME:VENTE=${successSale.sale?.saleNumber};MONTANT=${successSale.sale?.total}${successSale.sale?.currency};DATE=${new Date().toISOString()}`}
+                  value={`SMARTPME:VENTE=${successSale.sale?.saleNumber};MONTANT=${successSale.sale?.total}${successSale.sale?.currency};DATE=${new Date().toISOString()}`}
                   size={90}
                   label="Scan Reçu Fiscal"
                 />
@@ -1144,13 +1144,13 @@ export const SalesPage: React.FC = () => {
                     const s = successSale?.sale || successSale;
                     const inv = successSale?.invoice;
                     const message = encodeURIComponent(
-                      `*${organization?.name || 'OpenPME'} - TICKET DE CAISSE*\n` +
+                      `*${organization?.name || 'Smart PME Finance'} - TICKET DE CAISSE*\n` +
                       `Ticket N° : *${s?.saleNumber}*\n` +
                       (inv ? `Facture : *${inv?.invoiceNumber}*\n` : '') +
                       `Date : ${new Date(s?.createdAt || Date.now()).toLocaleString('fr-FR')}\n` +
                       `Total Encaissé : *${formatCurrency(Number(s?.total || 0), s?.currency || 'CDF')}*\n` +
                       `Mode : *${paymentMethod}*\n\n` +
-                      `_Merci pour votre visite chez ${organization?.name || 'OpenPME'} !_`
+                      `_Merci pour votre visite chez ${organization?.name || 'Smart PME Finance'} !_`
                     );
                     window.open(`https://wa.me/?text=${message}`, '_blank');
                   }}

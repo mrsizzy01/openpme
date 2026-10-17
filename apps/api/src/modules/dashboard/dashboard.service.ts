@@ -107,6 +107,63 @@ export class DashboardService {
       take: 5,
     });
 
+    // 10. Last 7 days breakdown for visual charts
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const pastSevenDaysSales = await this.prisma.sale.findMany({
+      where: {
+        organizationId,
+        createdAt: { gte: sevenDaysAgo },
+      },
+      select: { total: true, createdAt: true },
+    });
+
+    const pastSevenDaysExpenses = await this.prisma.expense.findMany({
+      where: {
+        organizationId,
+        date: { gte: sevenDaysAgo },
+      },
+      select: { amount: true, date: true, category: true },
+    });
+
+    const dailyChart: Array<{ date: string; dayLabel: string; sales: number; expenses: number }> = [];
+    const daysFr = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const dayLabel = `${daysFr[d.getDay()]} ${d.getDate()}`;
+
+      const daySales = pastSevenDaysSales
+        .filter((s) => s.createdAt.toISOString().slice(0, 10) === dateStr)
+        .reduce((sum, s) => sum + Number(s.total), 0);
+
+      const dayExpenses = pastSevenDaysExpenses
+        .filter((e) => e.date.toISOString().slice(0, 10) === dateStr)
+        .reduce((sum, e) => sum + Number(e.amount), 0);
+
+      dailyChart.push({
+        date: dateStr,
+        dayLabel,
+        sales: roundMoney(daySales),
+        expenses: roundMoney(dayExpenses),
+      });
+    }
+
+    // 11. Top Expense Categories
+    const expenseCategoryMap: Record<string, number> = {};
+    for (const exp of monthlyExpensesList) {
+      const cat = exp.category || 'Autres Dépenses';
+      expenseCategoryMap[cat] = (expenseCategoryMap[cat] || 0) + Number(exp.amount);
+    }
+    const topExpenses = Object.entries(expenseCategoryMap)
+      .map(([category, amount]) => ({ category, amount: roundMoney(amount) }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5);
+
     return {
       metrics: {
         todaySales: todaySalesTotal,
@@ -122,6 +179,8 @@ export class DashboardService {
         activeAnomaliesCount,
         unpaidInvoicesCount,
       },
+      dailyChart,
+      topExpenses,
       recentSales,
       recentInvoices,
       recentAnomalies,

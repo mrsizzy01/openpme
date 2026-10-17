@@ -16,6 +16,7 @@ import {
   Monitor,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { DashboardCharts } from '../components/DashboardCharts';
 
 const statusLabel: Record<string, string> = {
   COMPLETED: 'Complétée',
@@ -211,6 +212,15 @@ export const DashboardPage: React.FC = () => {
           <div className="kpi-sub">Détectées, en attente de résolution</div>
         </div>
       </div>
+
+      {/* Graphiques visuels interactifs du Chiffre d'Affaires & Structure des charges */}
+      <DashboardCharts
+        dailyData={data.dailyChart}
+        topExpenses={data.topExpenses}
+        currency={metrics.primaryCurrency}
+        monthlyRevenue={metrics.monthlyRevenue}
+        monthlyExpenses={metrics.monthlyExpenses}
+      />
 
       {/* Barre d'état de contrôle à distance */}
       <div style={{

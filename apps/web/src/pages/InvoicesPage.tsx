@@ -128,14 +128,14 @@ export const InvoicesPage: React.FC = () => {
       'Montant Réglé': inv.paidAmount,
       'Solde Restant': inv.balance,
     }));
-    exportToCsv('Factures_OpenPME', rows);
+    exportToCsv('Factures_SmartPME', rows);
     success('Export Excel / CSV des factures téléchargé avec succès !');
   };
 
   const handleShareWhatsApp = (inv: any) => {
     const phone = inv.customer?.phone ? inv.customer.phone.replace(/[^0-9]/g, '') : '';
     const message = encodeURIComponent(
-      `*${organization?.name || 'OpenPME'} - FACTURE OFFICIELLE*\n` +
+      `*${organization?.name || 'Smart PME Finance'} - FACTURE OFFICIELLE*\n` +
       `N° Facture : *${inv.invoiceNumber}*\n` +
       `Client : *${inv.customer?.name || 'Client Comptoir'}*\n` +
       `Date : ${new Date(inv.createdAt).toLocaleDateString('fr-FR')}\n` +
@@ -386,7 +386,7 @@ export const InvoicesPage: React.FC = () => {
                   {organization?.settings?.bankDetails && `Coordonnées : ${organization.settings.bankDetails}`}
                 </div>
                 <QRCodeDisplay
-                  value={`OPENPME:FAC=${selectedInvoice.invoiceNumber};NIF=${organization?.taxId || 'A1209384E'};TOTAL=${selectedInvoice.total}${selectedInvoice.currency};DATE=${selectedInvoice.createdAt}`}
+                  value={`SMARTPME:FAC=${selectedInvoice.invoiceNumber};NIF=${organization?.taxId || 'A1209384E'};TOTAL=${selectedInvoice.total}${selectedInvoice.currency};DATE=${selectedInvoice.createdAt}`}
                   size={95}
                   label="Scan Fiscalité DGI"
                 />

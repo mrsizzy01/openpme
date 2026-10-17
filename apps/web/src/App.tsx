@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
+import { CommandPalette } from './components/CommandPalette';
 import { ApiClient } from './api/client';
 
 // Pages
@@ -28,6 +29,18 @@ const ProtectedLayout: React.FC<{ children: React.ReactNode; title: string; subt
   const [activeSession, setActiveSession] = useState<any | null>(null);
   const [anomalyCount, setAnomalyCount] = useState<number>(0);
   const [lowStockCount, setLowStockCount] = useState<number>(0);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -123,9 +136,15 @@ const ProtectedLayout: React.FC<{ children: React.ReactNode; title: string; subt
     <div className="app-shell">
       <Sidebar anomalyCount={anomalyCount} lowStockCount={lowStockCount} />
       <div className="main-content">
-        <Header title={title} subtitle={subtitle} activeSession={activeSession} />
+        <Header
+          title={title}
+          subtitle={subtitle}
+          activeSession={activeSession}
+          onOpenCommandPalette={() => setIsPaletteOpen(true)}
+        />
         <main className="page-body">{children}</main>
       </div>
+      <CommandPalette isOpen={isPaletteOpen} onClose={() => setIsPaletteOpen(false)} />
     </div>
   );
 };

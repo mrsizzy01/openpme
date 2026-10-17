@@ -12,6 +12,11 @@ import {
   AlertCircle,
   RefreshCw,
   Search,
+  ShieldCheck,
+  Check,
+  X,
+  Layers,
+  Lock,
 } from 'lucide-react';
 import { ApiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -27,6 +32,88 @@ interface UserItem {
   isActive: boolean;
   createdAt: string;
 }
+
+interface RbacMatrixRow {
+  domain: string;
+  permission: string;
+  description: string;
+  roles: Record<'SUPER_ADMIN' | 'ORG_OWNER' | 'MANAGER' | 'ACCOUNTANT' | 'CASHIER' | 'AUDITOR', 'ALL' | 'READ' | 'NONE'>;
+}
+
+const RBAC_RULES: RbacMatrixRow[] = [
+  {
+    domain: 'Point de Vente (POS)',
+    permission: 'Encaissement & Ventes directes',
+    description: 'Enregistrer les ventes au comptoir, paniers et tickets 80mm',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'NONE', CASHIER: 'ALL', AUDITOR: 'NONE' },
+  },
+  {
+    domain: 'Caisse & Trésorerie',
+    permission: 'Clôture de Caisse (Z) & Billetage CDF',
+    description: 'Comptage physique des espèces, détection d’écarts et arrêt journalier',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'READ', CASHIER: 'ALL', AUDITOR: 'READ' },
+  },
+  {
+    domain: 'Catalogue & Stocks',
+    permission: 'Création d’articles & seuils d’alerte',
+    description: 'Modifier les prix d’achat/vente, réapprovisionner et ajuster stocks',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'READ', CASHIER: 'READ', AUDITOR: 'READ' },
+  },
+  {
+    domain: 'Facturation & Devis',
+    permission: 'Émission Factures A4 & Créances',
+    description: 'Générer des factures officielles proforma, délais de paiement et suivi',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'ALL', CASHIER: 'NONE', AUDITOR: 'READ' },
+  },
+  {
+    domain: 'Contrôle Comptable',
+    permission: 'Annulation de Factures & Avoirs',
+    description: 'Exige motif obligatoire et horodatage dans le journal d’audit',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'NONE', ACCOUNTANT: 'NONE', CASHIER: 'NONE', AUDITOR: 'NONE' },
+  },
+  {
+    domain: 'Dépenses & Charges',
+    permission: 'Engagement des dépenses de caisse',
+    description: 'Paiement fournisseurs, loyer, salaires et consommables',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'ALL', CASHIER: 'NONE', AUDITOR: 'READ' },
+  },
+  {
+    domain: 'Pilotage & Décision',
+    permission: 'Marge Brute & Tableau de bord 7j',
+    description: 'Indicateurs de rentabilité financière et graphes comparatifs',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'ALL', CASHIER: 'NONE', AUDITOR: 'READ' },
+  },
+  {
+    domain: 'Moteur IA de Fraude',
+    permission: 'Détection d’Anomalies Financières',
+    description: 'Alertes automatiques sur remises abusives, écarts et sorties anormales',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'ALL', CASHIER: 'NONE', AUDITOR: 'ALL' },
+  },
+  {
+    domain: 'Sécurité & Audit Trail',
+    permission: 'Journal d’Audit & Export Excel',
+    description: 'Traçabilité inaltérable des actions sensibles et adresses IP',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'NONE', ACCOUNTANT: 'NONE', CASHIER: 'NONE', AUDITOR: 'ALL' },
+  },
+  {
+    domain: 'Configuration Devises',
+    permission: 'Taux de Change Multi-Devises (USD/CDF)',
+    description: 'Mise à jour du taux officiel et recalcul dynamique de la trésorerie',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'NONE', CASHIER: 'NONE', AUDITOR: 'NONE' },
+  },
+  {
+    domain: 'Infrastructure POS',
+    permission: 'Verrouillage à Distance des Terminaux',
+    description: 'Bloquer immédiatement un poste caisse compromis ou suspect',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'ALL', ACCOUNTANT: 'NONE', CASHIER: 'NONE', AUDITOR: 'NONE' },
+  },
+  {
+    domain: 'Gouvernance RBAC',
+    permission: 'Création Utilisateurs & Rôles',
+    description: 'Administration des accès, réinitialisation mots de passe et privilèges',
+    roles: { SUPER_ADMIN: 'ALL', ORG_OWNER: 'ALL', MANAGER: 'NONE', ACCOUNTANT: 'NONE', CASHIER: 'NONE', AUDITOR: 'NONE' },
+  },
+];
 
 const ROLE_INFO: Record<string, { label: string; color: string; desc: string }> = {
   SUPER_ADMIN: { label: 'Super Admin', color: '#7C3AED', desc: 'Contrôle système total et maintenance' },
@@ -46,6 +133,7 @@ export const UsersPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<'users' | 'matrix'>('users');
 
   // Formulaire création
   const [formData, setFormData] = useState({
@@ -155,8 +243,30 @@ export const UsersPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Barre de recherche */}
-      <div className="card" style={{ padding: '16px', marginBottom: '20px' }}>
+      {/* ── Sélecteur d'Onglets ── */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', borderBottom: '1px solid #E2E8F0', paddingBottom: '12px' }}>
+        <button
+          type="button"
+          onClick={() => setActiveTab('users')}
+          className={`btn btn-sm ${activeTab === 'users' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <Users size={15} /> Collaborateurs ({users.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('matrix')}
+          className={`btn btn-sm ${activeTab === 'matrix' ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <ShieldCheck size={15} /> Matrice des Habilitations (RBAC & SoD)
+        </button>
+      </div>
+
+      {activeTab === 'users' ? (
+        <>
+          {/* Barre de recherche */}
+          <div className="card" style={{ padding: '16px', marginBottom: '20px' }}>
         <div style={{ position: 'relative' }}>
           <Search size={18} style={{ position: 'absolute', left: '12px', top: '12px', color: '#94A3B8' }} />
           <input
@@ -248,6 +358,92 @@ export const UsersPage: React.FC = () => {
           })}
         </div>
       )}
+    </>
+  ) : (
+    /* ── Vue Matrice des Permissions & Sécurité RBAC ── */
+    <div className="card" style={{ padding: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ShieldCheck size={20} color="#2563EB" />
+            Matrice de Ségrégation des Tâches (Segregation of Duties - SoD)
+          </h3>
+          <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748B' }}>
+            Conformité aux normes d’audit et politique d’accès au moindre privilège (Principle of Least Privilege).
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '12px', fontSize: '12px', alignItems: 'center' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#DCFCE7', color: '#166534', padding: '3px 8px', borderRadius: '4px', fontWeight: 700 }}>
+            <Check size={13} /> Autorisé
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#DBEAFE', color: '#1E40AF', padding: '3px 8px', borderRadius: '4px', fontWeight: 700 }}>
+            <Layers size={13} /> Lecture Seule
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#F1F5F9', color: '#94A3B8', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+            <X size={13} /> Refusé
+          </span>
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+          <thead>
+            <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+              <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>Domaine & Droit d’Accès</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#7C3AED' }}>Super Admin</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#1E40AF' }}>Propriétaire (DG)</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#0369A1' }}>Gérant</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#059669' }}>Comptable</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#D97706' }}>Caissier</th>
+              <th style={{ padding: '12px 10px', textAlign: 'center', fontWeight: 700, color: '#DC2626' }}>Auditeur</th>
+            </tr>
+          </thead>
+          <tbody>
+            {RBAC_RULES.map((rule, idx) => {
+              const renderBadge = (val: 'ALL' | 'READ' | 'NONE') => {
+                if (val === 'ALL') {
+                  return (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#DCFCE7', color: '#166534', padding: '3px 7px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }}>
+                      <Check size={12} /> Total
+                    </span>
+                  );
+                }
+                if (val === 'READ') {
+                  return (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#DBEAFE', color: '#1E40AF', padding: '3px 7px', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }}>
+                      <Layers size={12} /> Lecture
+                    </span>
+                  );
+                }
+                return (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#F8FAFC', color: '#94A3B8', padding: '3px 7px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>
+                    <X size={12} /> —
+                  </span>
+                );
+              };
+
+              return (
+                <tr key={idx} style={{ borderBottom: '1px solid #F1F5F9', background: idx % 2 === 0 ? '#FFFFFF' : '#FBFDFE' }}>
+                  <td style={{ padding: '12px 14px' }}>
+                    <div style={{ fontWeight: 600, color: '#0F172A' }}>{rule.permission}</div>
+                    <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '2px' }}>
+                      <span style={{ fontWeight: 600, color: '#475569' }}>[{rule.domain}]</span> {rule.description}
+                    </div>
+                  </td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.SUPER_ADMIN)}</td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.ORG_OWNER)}</td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.MANAGER)}</td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.ACCOUNTANT)}</td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.CASHIER)}</td>
+                  <td style={{ padding: '12px 10px', textAlign: 'center' }}>{renderBadge(rule.roles.AUDITOR)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
 
       {/* Modal Création Collaborateur */}
       {showModal && (

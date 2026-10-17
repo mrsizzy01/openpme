@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ApiClient } from '../api/client';
 import { formatCurrency, Currency, roundMoney } from '@smart-pme/shared';
-import { Package, Plus, Search, AlertTriangle, X, RefreshCw, Pencil, Trash2 } from 'lucide-react';
+import { Package, Plus, Search, AlertTriangle, X, RefreshCw, Pencil, Trash2, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { exportToCsv } from '../utils/exportCsv';
 
 export const ProductsPage: React.FC = () => {
   const { organization, user } = useAuth();
@@ -181,6 +182,25 @@ export const ProductsPage: React.FC = () => {
     }
   };
 
+  const handleExportCsv = () => {
+    if (!products.length) return;
+    const rows = products.map((p) => ({
+      'Code Référence': p.code || '',
+      'Code-Barres': p.barcode || '',
+      'Désignation': p.name,
+      'Catégorie': p.category?.name || 'Général',
+      'Prix Achat': Number(p.purchasePrice || 0),
+      'Prix Vente': Number(p.salePrice || 0),
+      'Devise': p.currency || 'CDF',
+      'Stock Disponible': p.isService ? 'N/A (Service)' : p.currentStock,
+      'Seuil Min': p.isService ? 'N/A' : p.minStockLevel,
+      'Unité': p.unit || 'Pièce',
+      'Statut': p.currentStock <= p.minStockLevel && !p.isService ? 'Alerte Stock' : 'OK',
+    }));
+    exportToCsv('Stock_Produits_SmartPME', rows);
+    success('Export du stock Excel / CSV généré avec succès.');
+  };
+
   const buy = parseFloat(formPurchasePrice) || 0;
   const sell = parseFloat(formSalePrice) || 0;
   const marginAmt = roundMoney(sell - buy);
@@ -234,6 +254,14 @@ export const ProductsPage: React.FC = () => {
           </form>
 
           <div className="table-toolbar-actions">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportCsv}
+              title="Exporter le catalogue en Excel / CSV"
+            >
+              <FileSpreadsheet size={13} /> Exporter
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={loadData}>
               <RefreshCw size={13} />
             </button>

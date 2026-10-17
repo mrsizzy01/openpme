@@ -152,6 +152,18 @@ export class RemoteControlService {
     terminal.pendingCommand = 'LOCK';
     terminal.status = 'LOCKED';
     terminal.commandMessage = reason || 'Poste verrouillé par la Direction.';
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: terminal.organizationId || organizationId,
+        userId: terminal.userId || null,
+        action: 'REMOTE_TERMINAL_LOCKED',
+        entity: 'Terminal',
+        entityId: terminalId,
+        newValues: { reason: terminal.commandMessage, lockedAt: new Date().toISOString() },
+      },
+    }).catch(() => {});
+
     return { success: true, message: 'Commande de verrouillage transmise.' };
   }
 
@@ -176,6 +188,18 @@ export class RemoteControlService {
     terminal.pendingCommand = 'UNLOCK';
     terminal.status = 'ONLINE';
     terminal.commandMessage = undefined;
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: terminal.organizationId || organizationId,
+        userId: terminal.userId || null,
+        action: 'REMOTE_TERMINAL_UNLOCKED',
+        entity: 'Terminal',
+        entityId: terminalId,
+        newValues: { unlockedAt: new Date().toISOString() },
+      },
+    }).catch(() => {});
+
     return { success: true, message: 'Poste déverrouillé avec succès.' };
   }
 

@@ -108,6 +108,93 @@ export class AnomaliesService {
       }
     }
 
+    // 3. Scan Cash Discrepancies (Écarts de caisse suspects)
+    const discrepancyThreshold = Number(orgSettings?.alertCashDiscrepancyThreshold || 10000);
+    const closedSessionsWithGap = await this.prisma.cashSession.findMany({
+      where: {
+        organizationId,
+        status: 'CLOSED',
+        difference: { not: null },
+      },
+      include: { cashRegister: true, user: true },
+      orderBy: { closedAt: 'desc' },
+      take: 20,
+    });
+
+    for (const session of closedSessionsWithGap) {
+      const diffAmount = Math.abs(Number(session.difference || 0));
+      if (diffAmount >= discrepancyThreshold) {
+        const existing = await this.prisma.anomalyAlert.findFirst({
+          where: {
+            organizationId,
+            ruleType: AnomalyRuleType.CASH_DISCREPANCY,
+            entityId: session.id,
+            status: { in: [AnomalyStatus.DETECTED, AnomalyStatus.UNDER_REVIEW] },
+          },
+        });
+
+        if (!existing) {
+          const isNegative = Number(session.difference) < 0;
+          const alert = await this.prisma.anomalyAlert.create({
+            data: {
+              organizationId,
+              ruleType: AnomalyRuleType.CASH_DISCREPANCY,
+              severity: diffAmount >= discrepancyThreshold * 3 ? AnomalySeverity.CRITICAL : AnomalySeverity.HIGH,
+              status: AnomalyStatus.DETECTED,
+              title: isNegative ? 'Déficit de caisse constaté' : 'Surplus de caisse inexpliqué',
+              explanation: `Écart de ${session.difference} ${session.currency} constaté sur ${session.cashRegister.name} par ${session.user.firstName} ${session.user.lastName}.`,
+              entityType: 'CashSession',
+              entityId: session.id,
+              observedValue: `${session.difference} ${session.currency}`,
+              expectedThreshold: `Tolérance max: ±${discrepancyThreshold} ${session.currency}`,
+            },
+          });
+          alertsCreated.push(alert);
+        }
+      }
+    }
+
+    // 4. Scan Abnormal Expenses (Dépenses exceptionnelles dépassant le seuil)
+    const expenseThreshold = Number(orgSettings?.alertLargeExpenseThreshold || 1000000);
+    const largeExpenses = await this.prisma.expense.findMany({
+      where: {
+        organizationId,
+        amount: { gte: expenseThreshold },
+      },
+      include: { user: true },
+      orderBy: { date: 'desc' },
+      take: 20,
+    });
+
+    for (const exp of largeExpenses) {
+      const existing = await this.prisma.anomalyAlert.findFirst({
+        where: {
+          organizationId,
+          ruleType: AnomalyRuleType.ABNORMAL_EXPENSE,
+          entityId: exp.id,
+          status: { in: [AnomalyStatus.DETECTED, AnomalyStatus.UNDER_REVIEW] },
+        },
+      });
+
+      if (!existing) {
+        const alert = await this.prisma.anomalyAlert.create({
+          data: {
+            organizationId,
+            ruleType: AnomalyRuleType.ABNORMAL_EXPENSE,
+            severity: Number(exp.amount) >= expenseThreshold * 2 ? AnomalySeverity.HIGH : AnomalySeverity.MEDIUM,
+            status: AnomalyStatus.DETECTED,
+            title: 'Décaissement / Dépense d’un montant inhabituel',
+            explanation: `Dépense n°${exp.expenseNumber} de ${exp.amount} ${exp.currency} ("${exp.category}") enregistrée au bénéfice de ${exp.beneficiary}.`,
+            entityType: 'Expense',
+            entityId: exp.id,
+            observedValue: `${exp.amount} ${exp.currency}`,
+            expectedThreshold: `Seuil d'alerte: ${expenseThreshold} ${exp.currency}`,
+          },
+        });
+        alertsCreated.push(alert);
+      }
+    }
+
     return {
       scannedAt: new Date(),
       newAlertsCount: alertsCreated.length,

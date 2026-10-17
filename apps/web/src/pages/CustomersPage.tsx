@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ApiClient } from '../api/client';
 import { formatCurrency } from '@smart-pme/shared';
-import { Users, Plus, Search, Phone, Mail, MapPin, X, AlertTriangle, RefreshCw, Receipt, Pencil, Trash2 } from 'lucide-react';
+import { Users, Plus, Search, Phone, Mail, MapPin, X, AlertTriangle, RefreshCw, Receipt, Pencil, Trash2, FileSpreadsheet } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
+import { exportToCsv } from '../utils/exportCsv';
 
 export const CustomersPage: React.FC = () => {
   const { user } = useAuth();
@@ -146,6 +147,24 @@ export const CustomersPage: React.FC = () => {
     }
   };
 
+  const handleExportCsv = () => {
+    if (!customers.length) return;
+    const rows = customers.map((c) => ({
+      'Code Client': c.code || '',
+      'Nom Complet': c.name,
+      'Entreprise / Société': c.companyName || '',
+      'Téléphone': c.phone || '',
+      'Email': c.email || '',
+      'Adresse': c.address || '',
+      'Plafond Crédit': Number(c.creditLimit || 0),
+      'Solde Dû': Number(c.outstandingBalance || 0),
+      'Devise': c.currency || 'CDF',
+      'Statut': c.isActive ? 'Actif' : 'Inactif',
+    }));
+    exportToCsv('Repertoire_Clients_SmartPME', rows);
+    success('Export du répertoire clients Excel / CSV généré avec succès.');
+  };
+
   return (
     <div>
       <div className="table-wrapper">
@@ -167,6 +186,14 @@ export const CustomersPage: React.FC = () => {
           </form>
 
           <div className="table-toolbar-actions">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportCsv}
+              title="Exporter le répertoire clients en Excel / CSV"
+            >
+              <FileSpreadsheet size={13} /> Exporter
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={loadCustomers}>
               <RefreshCw size={13} />
             </button>

@@ -15,6 +15,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RemoteControlModule } from './modules/remote-control/remote-control.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { HealthModule } from './modules/health/health.module';
+import { AuditModule } from './modules/audit/audit.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { HealthModule } from './modules/health/health.module';
     RemoteControlModule,
     NotificationsModule,
     HealthModule,
+    AuditModule,
   ],
 })
 export class AppModule {}

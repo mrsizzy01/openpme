@@ -6,7 +6,7 @@
     "start": "ts-node src/main.ts",
     "start:dev": "ts-node src/main.ts",
     "build": "tsc",
-    "test": "echo \"API tests passed\""
+    "test": "ts-node ../../scripts/test_runner.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

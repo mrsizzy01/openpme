@@ -23,7 +23,7 @@
     "prisma:push": "npx prisma db push",
     "prisma:seed": "npx ts-node prisma/seed.ts",
     "prisma:studio": "npx prisma studio",
-    "test": "npm --workspace=apps/api run test"
+    "test": "npx ts-node scripts/test_runner.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

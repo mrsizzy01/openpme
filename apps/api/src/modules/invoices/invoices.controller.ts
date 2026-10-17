@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { InvoicesService } from './invoices.service';
+import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { InvoiceStatus } from '@prisma/client';
@@ -30,7 +31,7 @@ export class InvoicesController {
 
   @Post()
   @ApiOperation({ summary: 'Créer une facture avec numérotation automatique' })
-  async createInvoice(@CurrentUser('organizationId') orgId: string, @Body() body: any) {
+  async createInvoice(@CurrentUser('organizationId') orgId: string, @Body() body: CreateInvoiceDto) {
     return this.invoicesService.createInvoice(orgId, body);
   }
 

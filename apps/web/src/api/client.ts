@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:3001/api/v1';
+const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3001/api/v1';
 
 export class ApiClient {
   private static getToken(): string | null {
@@ -265,6 +265,15 @@ export class ApiClient {
 
   static dismissAnomaly(id: string) {
     return this.request<any>(`/anomalies/${id}/dismiss`, { method: 'PATCH' });
+  }
+
+  // Audit Logs
+  static getAuditLogs(entity?: string, action?: string, limit = 100) {
+    const params = new URLSearchParams();
+    if (entity) params.append('entity', entity);
+    if (action) params.append('action', action);
+    params.append('limit', limit.toString());
+    return this.request<any[]>(`/audit?${params.toString()}`);
   }
 
   // Organization

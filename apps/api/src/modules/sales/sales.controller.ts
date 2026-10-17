@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SalesService } from './sales.service';
+import { CreateSaleDto } from './dto/create-sale.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
@@ -28,7 +29,7 @@ export class SalesController {
   async createSale(
     @CurrentUser('organizationId') orgId: string,
     @CurrentUser('id') userId: string,
-    @Body() body: any,
+    @Body() body: CreateSaleDto,
   ) {
     return this.salesService.createSale(orgId, userId, body);
   }

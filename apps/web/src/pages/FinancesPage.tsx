@@ -14,10 +14,12 @@ import {
   RefreshCw,
   CheckCircle,
   FileSpreadsheet,
+  Printer,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { exportToCsv } from '../utils/exportCsv';
+import { PrintZReportModal } from '../components/PrintZReportModal';
 
 const EXPENSE_CATEGORIES = [
   'Frais de fonctionnement',
@@ -82,6 +84,7 @@ export const FinancesPage: React.FC = () => {
   const [b1k, setB1k] = useState<string>('');
   const [b500, setB500] = useState<string>('');
   const [bPieces, setBPieces] = useState<string>('');
+  const [zReportData, setZReportData] = useState<any | null>(null);
 
   const loadFinances = async () => {
     try {
@@ -192,9 +195,16 @@ export const FinancesPage: React.FC = () => {
     try {
       await ApiClient.closeCashSession(currentSession.id, counted, closeNotes.trim() || undefined);
       setShowCloseModal(false);
+      setZReportData({
+        session: currentSession,
+        countedAmount: counted,
+        theoreticalAmount: theoreticalTotal,
+        billetage: useBilletage ? { b20k, b10k, b5k, b1k, b500, bPieces } : undefined,
+        notes: closeNotes.trim() || undefined,
+      });
       setCountedBalance('');
       setCloseNotes('');
-      success('Caisse clôturée et enregistrée avec succès.');
+      success('Caisse clôturée avec succès. Le Ticket Z est prêt pour impression.');
       loadFinances();
     } catch (err: any) {
       setCloseError(err.message || 'Erreur lors de la clôture de caisse.');
@@ -258,17 +268,31 @@ export const FinancesPage: React.FC = () => {
               </span>
             </div>
             {currentSession ? (
-              <button
-                type="button"
-                className="btn btn-sm btn-danger-outline"
-                onClick={() => {
-                  setCountedBalance(String(theoreticalTotal));
-                  setCloseError(null);
-                  setShowCloseModal(true);
-                }}
-              >
-                <Lock size={13} /> Clôturer
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setZReportData({
+                    session: currentSession,
+                    countedAmount: theoreticalTotal,
+                    theoreticalAmount: theoreticalTotal,
+                  })}
+                  title="Aperçu et impression du Ticket Z journalier"
+                >
+                  <Printer size={13} /> Ticket Z
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger-outline"
+                  onClick={() => {
+                    setCountedBalance(String(theoreticalTotal));
+                    setCloseError(null);
+                    setShowCloseModal(true);
+                  }}
+                >
+                  <Lock size={13} /> Clôturer
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -386,7 +410,7 @@ export const FinancesPage: React.FC = () => {
                   'Devise': exp.currency || 'CDF',
                   'Observations': exp.notes || '—',
                 }));
-                exportToCsv('Depenses_OpenPME', rows);
+                exportToCsv('Depenses_SmartPME', rows);
                 success('Journal des dépenses exporté avec succès !');
               }}
               title="Exporter les dépenses vers Excel/CSV"
@@ -781,6 +805,19 @@ export const FinancesPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ── Modal Ticket Z Clôture de Caisse ── */}
+      {zReportData && (
+        <PrintZReportModal
+          session={zReportData.session}
+          organization={organization}
+          countedAmount={zReportData.countedAmount}
+          theoreticalAmount={zReportData.theoreticalAmount}
+          billetage={zReportData.billetage}
+          notes={zReportData.notes}
+          onClose={() => setZReportData(null)}
+        />
       )}
     </div>
   );

@@ -13,7 +13,7 @@ Elle unifie au sein d'une même architecture :
 1. **Une API Centrale NestJS** versionnée (`/api/v1`) avec documentation Swagger interactive (`/api/docs`).
 2. **Une base relationnelle PostgreSQL** gérée par Prisma ORM avec isolation stricte multi-entreprises.
 3. **Une application Web moderne React + Vite** avec design system midnight blue/slate et glassmorphism.
-4. **Une application Windows Desktop Electron** réutilisant la même logique métier et offrant l'impression locale.
+4. **Une application Windows Desktop native PyQt6** intégrant le moteur Chromium, le heartbeat de présence et le killswitch distant.
 5. **Un moteur intelligent de détection des anomalies de gestion** (remises anormales, écarts de caisse, ruptures de stocks, dépenses excessives).
 
 ---
@@ -23,8 +23,9 @@ Elle unifie au sein d'une même architecture :
 - **Backend :** Node.js v24, NestJS 11, TypeScript 5, Prisma ORM 6, JWT, Class-Validator, Swagger OpenAPI.
 - **Base de données :** PostgreSQL 17 (service local `postgresql-x64-17` port 5432).
 - **Frontend Web :** React 18, TypeScript, Vite 6, Lucide Icons, Vanilla CSS Design System.
-- **Desktop Windows :** Electron 33, preload context bridge sécurisé.
+- **Desktop Windows :** Client natif PyQt6 (Chromium WebEngine) avec Kill Switch distant, surveillance de heartbeat et verrouillage immédiat.
 - **Packages partagés :** `@smart-pme/shared` (calculs monétaires, DTOs, énumérations).
+- **Tests automatisés :** Suite de validation comptable et d’anomalies (`npm test`).
 
 ---
 

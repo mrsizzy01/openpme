@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
+import { CreateCustomerDto, UpdateCustomerDto } from './dto/create-customer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -29,7 +30,7 @@ export class CustomersController {
 
   @Post()
   @ApiOperation({ summary: 'Créer un nouveau client' })
-  async create(@CurrentUser('organizationId') orgId: string, @Body() body: any) {
+  async create(@CurrentUser('organizationId') orgId: string, @Body() body: CreateCustomerDto) {
     return this.customersService.create(orgId, body);
   }
 
@@ -38,7 +39,7 @@ export class CustomersController {
   async update(
     @CurrentUser('organizationId') orgId: string,
     @Param('id') id: string,
-    @Body() body: any,
+    @Body() body: UpdateCustomerDto,
   ) {
     return this.customersService.update(orgId, id, body);
   }

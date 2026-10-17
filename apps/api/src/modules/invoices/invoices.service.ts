@@ -170,6 +170,18 @@ export class InvoicesService {
         },
       });
 
+      // Journal d'audit de sécurité
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          action: 'CANCEL_INVOICE',
+          entity: 'Invoice',
+          entityId: id,
+          oldValues: { invoiceNumber: inv.invoiceNumber, total: Number(inv.total), status: inv.status },
+          newValues: { status: InvoiceStatus.CANCELLED, reason },
+        },
+      });
+
       return updated;
     });
   }
