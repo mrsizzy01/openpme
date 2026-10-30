@@ -774,10 +774,10 @@ Smart PME Finance repose sur une architecture découplée assurant la séparatio
 ### 4.2.1. Protocole d'authentification par jeton JWT
 Lorsqu'un utilisateur initie une connexion :
 1. Le client transmet les identifiants via `POST /api/v1/auth/login` ;
-2. Le service backend extrait l'utilisateur, vérifie son statut `active = true` et compare le hachage du mot de passe avec l'empreinte stockée via `bcrypt.compare()` ;
-3. Si la validation réussit, le serveur génère un jeton signé cryptographiquement (**JWT**) contenant le `userId`, l'`organizationId` et le `role` avec une durée de validité de 24 heures ;
-4. Chaque requête subséquente inclut l'en-tête HTTP : `Authorization: Bearer <token>` ;
-5. Un garde NestJS (`JwtAuthGuard`) intercepte la requête, valide la signature et injecte l'objet utilisateur dans le contexte d'exécution.
+2. Le service vérifie le compte actif et le mot de passe avec bcrypt; les anciens hachages SHA-256 sont mis à niveau au prochain succès de connexion ;
+3. Le serveur émet un jeton d'accès JWT de courte durée (15 minutes) et un jeton opaque de renouvellement stocké sous forme hachée et transmis dans un cookie HttpOnly ;
+4. Chaque requête authentifiée inclut le jeton d'accès dans l'en-tête `Authorization: Bearer <jeton>` ; le renouvellement fait tourner le cookie de session ;
+5. Le garde NestJS (`JwtAuthGuard`) valide la signature, l'expiration et l'état de la session en base avant d'injecter le contexte utilisateur.
 
 ### 4.2.2. Matrice des droits d'accès basée sur les rôles (RBAC)
 
@@ -787,7 +787,7 @@ La granularité des autorisations est synthétisée ci-dessous :
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **SUPER_ADMIN** | Consultation | Consultation | Consultation | Non | Consultation | Total | Total |
 | **ORG_OWNER** | Total | Total | Total | Validation | Approbation | Résolution | Total |
-| **MANAGER** | Total | Total | Total | Validation | Enregistrement | Consultation | Consultation |
+| **MANAGER** | Total | Total | Total | Validation | Enregistrement | Gestion | Gestion |
 | **ACCOUNTANT** | Consultation | Consultation | Total | Validation | Total | Consultation | Non |
 | **CASHIER** | Émission | Consultation | Émission | Clôture propre | Non | Non | Non |
 | **INVENTORY_MANAGER**| Non | Total | Non | Non | Non | Consultation | Non |
@@ -866,7 +866,7 @@ Le développement et les bancs d'essai de la solution ont été menés avec les 
 - **Compilateur & Langage :** TypeScript 5.7.3 pour le backend et le frontend web, Python 3.12 pour le client natif ;
 - **Serveur de base de données :** PostgreSQL 17.2 configuré sur port local 5432 ;
 - **IDE et éditeur de code :** Visual Studio Code avec extensions ESLint, Prisma et GitLens ;
-- **Framework UI Desktop :** PyQt6 version 6.8.0 avec module `PyQt6-WebEngine` ;
+- **Client Windows Desktop :** application native Python avec PyQt6 et QtWebEngine ;
 - **Outil de compilation autonome :** PyInstaller 6.11.1 pour la génération de l'exécutable `.exe`.
 
 ---
@@ -911,7 +911,48 @@ Le client Desktop intègre un mécanisme de détection automatique d'état de l'
 
 ---
 
-## 5.4. Évaluation, tests de validation et analyse des performances
+## 5.4. Coupe-circuit distant bidirectionnel
+
+Chaque poste est enrôlé pour une entreprise et reçoit un jeton spécifique, distinct des jetons des utilisateurs. L'API ne conserve que le hachage du jeton; le desktop le stocke chiffré par DPAPI dans le profil Windows. L'état `ACTIVE` ou `LOCKED`, le motif, l'auteur, la version de commande et les accusés de réception sont persistés. Les transitions sont consignées dans le journal d'audit avec l'adresse IP et l'utilisateur manager.
+
+Le desktop transmet un heartbeat toutes les 15 secondes par défaut. Une transition verrouillée bloque l'interface et les requêtes des sessions liées au poste. Le client garde localement l'état verrouillé hors ligne; un poste actif dispose d'une période de grâce configurable de 24 heures par défaut. À la reconnexion, le statut serveur fait autorité et le client applique puis acquitte la nouvelle version. L'écran se déverrouille sans redémarrage du processus.
+
+```mermaid
+sequenceDiagram
+    actor Gerant
+    participant Web as Interface web
+    participant API as API NestJS
+    participant DB as PostgreSQL
+    participant PC as Desktop PyQt6
+
+    Gerant->>Web: Verrouiller / motif
+    Web->>API: POST /remote-control/terminals/:id/lock
+    API->>API: Vérifier session, rôle et entreprise
+    API->>DB: Persister LOCKED, version + 1, audit
+    API-->>Web: Commande envoyée / acquittement en attente
+    loop toutes les 10 à 30 secondes
+        PC->>API: Heartbeat signé + dernière version acquittée
+        API->>DB: Lire statut et enregistrer présence
+        API-->>PC: LOCKED ou ACTIVE, version et heure serveur
+        PC->>PC: Appliquer l'état et sauvegarder sous DPAPI
+    end
+    PC->>API: Heartbeat avec version appliquée
+    API->>DB: Enregistrer l'accusé
+    Web->>API: GET /remote-control/terminals
+    API-->>Web: Présence et état acquitté/en attente
+    Gerant->>Web: Déverrouiller / motif
+    Web->>API: POST /remote-control/terminals/:id/unlock
+    API->>DB: Persister ACTIVE, version + 1, audit
+    PC->>API: Heartbeat suivant
+    API-->>PC: ACTIVE
+    PC->>PC: Fermer l'écran de verrouillage
+```
+
+Cette protection n'est pas un mécanisme de gestion de périphérique (MDM) : un administrateur local Windows peut arrêter le processus ou modifier l'environnement de la machine. Les contrôles côté API empêchent cependant une session desktop verrouillée ou révoquée d'exécuter des opérations serveur.
+
+---
+
+## 5.5. Évaluation, tests de validation et analyse des performances
 
 Des campagnes d'évaluation ont été conduites sur un jeu d'essai simulant une semaine d'activité intense d'une PME kinoise (1 200 articles au catalogue, 3 caisses simultanées, 250 transactions par jour) :
 
@@ -1011,11 +1052,12 @@ Nous espérons vivement que **Smart PME Finance** servira de référence académ
 
 ## Annexe 2 : Comptes et Rôles de Démonstration (Jeu d'Essai)
 
-| Rôle RBAC | Nom Complet | Adresse Email | Mot de passe |
-|---|---|---|---|
-| **Administrateur / Propriétaire** | Jean-Luc Tshisekedi | `admin@smartpme.cd` | `Admin@2026!` |
-| **Gérant / Manager** | Christian Mwamba | `manager@smartpme.cd` | `Manager@2026!` |
-| **Comptable** | Sarah Kalala | `comptable@smartpme.cd` | `Comptable@2026!` |
-| **Caissier Principal** | Patrick Kasongo | `caissier@smartpme.cd` | `Caissier@2026!` |
-| **Gestionnaire de Stock** | Daniel Ilunga | `stock@smartpme.cd` | `Stock@2026!` |
-| **Auditeur Interne** | Rachel Mpoyi | `auditeur@smartpme.cd` | `Auditeur@2026!` |
+| Rôle RBAC | Compte de test |
+|---|---|
+| **Administrateur / Propriétaire** | Généré par le seed local |
+| **Gérant / Manager** | Généré par le seed local |
+| **Comptable** | Généré par le seed local |
+| **Caissier Principal** | Généré par le seed local |
+| **Gestionnaire de Stock / Auditeur Interne** | À créer dans le jeu d'essai local si nécessaire |
+
+Les comptes de démonstration et mots de passe générés par le seed sont réservés au développement local et ne sont pas des identifiants de production.

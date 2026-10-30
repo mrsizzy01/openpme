@@ -25,6 +25,7 @@ export const SettingsPage: React.FC = () => {
   const [primaryCurrency, setPrimaryCurrency] = useState('CDF');
   const [secondaryCurrency, setSecondaryCurrency] = useState('USD');
   const [exchangeRate, setExchangeRate] = useState('2850');
+  const [rateHistory, setRateHistory] = useState<any[]>([]);
   const [taxRatePercent, setTaxRatePercent] = useState('16');
   const [enableTax, setEnableTax] = useState(true);
   const [invoicePrefix, setInvoicePrefix] = useState('FAC-');
@@ -128,6 +129,12 @@ export const SettingsPage: React.FC = () => {
     }
   }, [organization]);
 
+  useEffect(() => {
+    ApiClient.getExchangeRates(10)
+      .then(setRateHistory)
+      .catch((err: Error) => toastError(err.message || 'Impossible de charger l’historique des taux.'));
+  }, []);
+
   const handleSaveAll = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -158,7 +165,7 @@ export const SettingsPage: React.FC = () => {
       await ApiClient.updateOrgSettings({
         primaryCurrency,
         secondaryCurrency,
-        exchangeRateUsdToCdf: parseFloat(exchangeRate) || 2850,
+        exchangeRateUsdToCdf: exchangeRate,
         taxRatePercent: parseFloat(taxRatePercent) || 16,
         enableTax,
         invoicePrefix: invoicePrefix.trim() || 'FAC-',
@@ -170,6 +177,7 @@ export const SettingsPage: React.FC = () => {
       });
 
       await refreshProfile();
+      setRateHistory(await ApiClient.getExchangeRates(10));
       if (typeof BroadcastChannel !== 'undefined') {
         const ch = new BroadcastChannel('smart_pme_sync_channel');
         ch.postMessage({
@@ -285,7 +293,11 @@ export const SettingsPage: React.FC = () => {
               <div className="form-group">
                 <label className="form-label" htmlFor="set-curr">Devise principale</label>
                 <select id="set-curr" className="input-field" value={primaryCurrency}
-                  onChange={(e) => setPrimaryCurrency(e.target.value)}>
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setPrimaryCurrency(value);
+                    if (value === secondaryCurrency) setSecondaryCurrency(value === 'CDF' ? 'USD' : 'CDF');
+                  }}>
                   <option value="CDF">CDF — Franc Congolais</option>
                   <option value="USD">USD — Dollar américain</option>
                 </select>
@@ -296,15 +308,22 @@ export const SettingsPage: React.FC = () => {
                   onChange={(e) => setSecondaryCurrency(e.target.value)}>
                   <option value="USD">USD — Dollar américain</option>
                   <option value="CDF">CDF — Franc Congolais</option>
-                  <option value="EUR">EUR — Euro</option>
                 </select>
               </div>
               <div className="form-group">
                 <label className="form-label" htmlFor="set-rate">
                   Taux 1 USD → CDF <span className="required">*</span>
                 </label>
-                <input id="set-rate" type="number" min="1" step="1" required className="input-field"
+                <input id="set-rate" type="number" min="0.0001" step="0.0001" required className="input-field"
                   value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} />
+                <div className="form-hint">Le taux est enregistré dans l’historique journalier de l’entreprise.</div>
+                {rateHistory.length > 0 && (
+                  <div className="form-hint" style={{ marginTop: '6px' }}>
+                    Derniers taux : {rateHistory.slice(0, 5).map((rate) =>
+                      `${new Date(rate.effectiveDate).toLocaleDateString('fr-FR')} : ${rate.rate} CDF`,
+                    ).join(' · ')}
+                  </div>
+                )}
               </div>
             </div>
 

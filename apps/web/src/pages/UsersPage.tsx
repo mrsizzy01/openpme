@@ -12,6 +12,7 @@ import {
   AlertCircle,
   RefreshCw,
   Search,
+  Copy,
 } from 'lucide-react';
 import { ApiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -26,17 +27,26 @@ interface UserItem {
   phone: string | null;
   isActive: boolean;
   createdAt: string;
+  isOnline: boolean;
+  activeSessionsCount: number;
+  lastSeenAt: string | null;
 }
 
 const ROLE_INFO: Record<string, { label: string; color: string; desc: string }> = {
   SUPER_ADMIN: { label: 'Super Admin', color: '#7C3AED', desc: 'Contrôle système total et maintenance' },
   ORG_OWNER: { label: 'Propriétaire / DG', color: '#1E40AF', desc: 'Gestion financière, paramètres et validation totale' },
-  MANAGER: { label: 'Gérant / Manager', color: '#0369A1', desc: 'Supervision des stocks, caisses et équipes' },
+  MANAGER: { label: 'Gérant / Manager', color: '#0369A1', desc: 'Contrôle des opérations, paramètres et collaborateurs de l’entreprise' },
   ACCOUNTANT: { label: 'Comptable', color: '#059669', desc: 'Facturation, dépenses, créances et bilans' },
   CASHIER: { label: 'Caissier', color: '#D97706', desc: 'Ventes au comptoir (POS) et encaissements' },
+  SALES_REP: { label: 'Commercial', color: '#0E7490', desc: 'Ventes et suivi des clients' },
   INVENTORY_MANAGER: { label: 'Gestionnaire Stock', color: '#4B5563', desc: 'Entrées, sorties et inventaires physiques' },
+  PURCHASER: { label: 'Acheteur', color: '#7C3AED', desc: 'Consultation des fournisseurs et achats' },
   AUDITOR: { label: 'Auditeur Interne', color: '#DC2626', desc: 'Lecture seule des journaux d\'audit et anomalies' },
 };
+
+const ASSIGNABLE_ROLE_KEYS = Object.keys(ROLE_INFO).filter(
+  (role) => role !== 'SUPER_ADMIN' && role !== 'ORG_OWNER',
+);
 
 export const UsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -46,6 +56,7 @@ export const UsersPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [temporaryPassword, setTemporaryPassword] = useState<{ email: string; password: string } | null>(null);
 
   // Formulaire création
   const [formData, setFormData] = useState({
@@ -53,7 +64,6 @@ export const UsersPage: React.FC = () => {
     lastName: '',
     email: '',
     phone: '',
-    password: '',
     role: 'CASHIER',
   });
   const [saving, setSaving] = useState(false);
@@ -72,21 +82,27 @@ export const UsersPage: React.FC = () => {
 
   useEffect(() => {
     fetchUsers();
+    const refreshInterval = window.setInterval(() => {
+      void fetchUsers();
+    }, 30_000);
+    return () => window.clearInterval(refreshInterval);
   }, []);
+
+  const onlineCount = users.filter((u) => u.isOnline).length;
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await ApiClient.createUser(formData);
+      const created = await ApiClient.createUser(formData);
       success('Collaborateur créé avec succès !');
       setShowModal(false);
+      setTemporaryPassword({ email: created.email, password: created.temporaryPassword });
       setFormData({
         firstName: '',
         lastName: '',
         email: '',
         phone: '',
-        password: '',
         role: 'CASHIER',
       });
       fetchUsers();
@@ -94,6 +110,26 @@ export const UsersPage: React.FC = () => {
       error(err.message || 'Erreur lors de la création');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleResetPassword = async (user: UserItem) => {
+    try {
+      const result = await ApiClient.resetUserPassword(user.id);
+      setTemporaryPassword({ email: result.email, password: result.temporaryPassword });
+      success('Nouveau mot de passe généré. Il ne sera affiché qu’une seule fois.');
+    } catch (err: any) {
+      error(err.message || 'Erreur lors de la réinitialisation du mot de passe');
+    }
+  };
+
+  const copyTemporaryPassword = async () => {
+    if (!temporaryPassword) return;
+    try {
+      await navigator.clipboard.writeText(temporaryPassword.password);
+      success('Mot de passe copié.');
+    } catch {
+      error('Copie impossible. Sélectionnez et copiez le mot de passe manuellement.');
     }
   };
 
@@ -142,8 +178,12 @@ export const UsersPage: React.FC = () => {
             <Users size={26} color="#1E40AF" /> Gestion des Rôles & Collaborateurs (RBAC)
           </h1>
           <p className="page-subtitle">
-            Configurez les profils d'accès, affectez les rôles et contrôlez les autorisations de votre équipe.
+            Gérez les accès, rôles et sessions de votre équipe. Les statuts de présence sont actualisés automatiquement.
           </p>
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', color: '#475569', fontSize: '13px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: onlineCount ? '#16A34A' : '#94A3B8' }} />
+            {onlineCount} collaborateur{onlineCount === 1 ? '' : 's'} en ligne sur {users.filter((u) => u.isActive).length} actif{users.filter((u) => u.isActive).length === 1 ? '' : 's'}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={fetchUsers} className="btn-secondary" title="Actualiser">
@@ -183,6 +223,8 @@ export const UsersPage: React.FC = () => {
           {filteredUsers.map((u) => {
             const roleInfo = ROLE_INFO[u.role] || { label: u.role, color: '#64748B', desc: 'Rôle personnalisé' };
             const isMe = u.id === currentUser?.id;
+            const isProtected = u.role === 'ORG_OWNER' || u.role === 'SUPER_ADMIN';
+            const canManageUser = !isMe && !isProtected;
 
             return (
               <div key={u.id} className="card" style={{ padding: '20px', borderTop: `4px solid ${roleInfo.color}` }}>
@@ -197,9 +239,9 @@ export const UsersPage: React.FC = () => {
                   </div>
                   <button
                     onClick={() => handleToggleStatus(u)}
-                    disabled={isMe}
+                    disabled={!canManageUser}
                     title={u.isActive ? 'Désactiver le compte' : 'Activer le compte'}
-                    style={{ background: 'none', border: 'none', cursor: isMe ? 'not-allowed' : 'pointer' }}
+                    style={{ background: 'none', border: 'none', cursor: canManageUser ? 'pointer' : 'not-allowed' }}
                   >
                     {u.isActive ? <CheckCircle2 size={20} color="#16A34A" /> : <XCircle size={20} color="#DC2626" />}
                   </button>
@@ -222,11 +264,11 @@ export const UsersPage: React.FC = () => {
                   <select
                     className="input"
                     value={u.role}
-                    disabled={isMe}
+                    disabled={!canManageUser}
                     onChange={(e) => handleRoleChange(u.id, e.target.value)}
                     style={{ fontSize: '13px', fontWeight: 600, color: roleInfo.color }}
                   >
-                    {Object.keys(ROLE_INFO).map((r) => (
+                    {ASSIGNABLE_ROLE_KEYS.map((r) => (
                       <option key={r} value={r}>
                         {ROLE_INFO[r].label}
                       </option>
@@ -235,12 +277,37 @@ export const UsersPage: React.FC = () => {
                   <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#64748B' }}>{roleInfo.desc}</p>
                 </div>
 
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={!canManageUser}
+                  onClick={() => handleResetPassword(u)}
+                  style={{ marginBottom: '14px', width: '100%', opacity: canManageUser ? 1 : 0.55 }}
+                >
+                  <Key size={14} /> Réinitialiser le mot de passe
+                </button>
+                {isProtected && (
+                  <p style={{ margin: '0 0 12px', fontSize: '11px', color: '#64748B' }}>
+                    Compte protégé : seul son titulaire peut utiliser ce compte.
+                  </p>
+                )}
+
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#94A3B8' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Calendar size={12} /> Ajouté le {new Date(u.createdAt).toLocaleDateString('fr-FR')}
                   </span>
                   <span style={{ fontWeight: 600, color: u.isActive ? '#16A34A' : '#DC2626' }}>
                     {u.isActive ? 'Actif' : 'Désactivé'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginTop: '10px', color: u.isOnline ? '#15803D' : '#64748B' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: u.isOnline ? '#16A34A' : '#CBD5E1' }} />
+                  <span>
+                    {u.isOnline
+                      ? `En ligne${u.activeSessionsCount > 1 ? ` · ${u.activeSessionsCount} sessions` : ''}`
+                      : u.lastSeenAt
+                        ? `Vu le ${new Date(u.lastSeenAt).toLocaleString('fr-FR')}`
+                        : 'Jamais connecté'}
                   </span>
                 </div>
               </div>
@@ -311,26 +378,12 @@ export const UsersPage: React.FC = () => {
                   value={formData.role}
                   onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                 >
-                  {Object.keys(ROLE_INFO).map((r) => (
+                  {ASSIGNABLE_ROLE_KEYS.map((r) => (
                     <option key={r} value={r}>
                       {ROLE_INFO[r].label} — {ROLE_INFO[r].desc}
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div className="form-group">
-                <label className="label">Mot de passe Temporaire</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="Par défaut : Pme@2026!"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                />
-                <small style={{ color: '#64748B', fontSize: '11px' }}>
-                  Si laissé vide, le mot de passe initial sera <code>Pme@2026!</code>
-                </small>
               </div>
 
               <div className="modal-actions" style={{ marginTop: '20px' }}>
@@ -342,6 +395,32 @@ export const UsersPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {temporaryPassword && (
+        <div className="modal-backdrop">
+          <div className="modal-content" style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h2>Nouveau mot de passe</h2>
+              <button onClick={() => setTemporaryPassword(null)} className="btn-close">×</button>
+            </div>
+            <p>
+              Transmettez ce mot de passe à <strong>{temporaryPassword.email}</strong> par un canal sûr.
+              Il ne sera plus visible après la fermeture de cette fenêtre.
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input className="input" readOnly value={temporaryPassword.password} />
+              <button type="button" className="btn-secondary" onClick={copyTemporaryPassword} title="Copier le mot de passe">
+                <Copy size={16} />
+              </button>
+            </div>
+            <div className="modal-actions" style={{ marginTop: '20px' }}>
+              <button type="button" className="btn-primary" onClick={() => setTemporaryPassword(null)}>
+                J’ai noté le mot de passe
+              </button>
+            </div>
           </div>
         </div>
       )}

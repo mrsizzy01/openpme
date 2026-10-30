@@ -1,32 +1,52 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { getCorsOrigins, getJwtSecret } from './common/config/security.config';
 
 async function bootstrap() {
+  getJwtSecret();
+  const corsOrigins = getCorsOrigins();
   const app = await NestFactory.create(AppModule);
 
-  // 1. CORS Configuration
+  app.use(cookieParser());
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+      },
+    },
+  }));
+
   app.enableCors({
-    origin: '*',
+    origin: (origin, callback) => {
+      if (!origin || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin not allowed by CORS: ${origin}`));
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
 
-  // 2. Global API Prefix
   app.setGlobalPrefix('api/v1');
 
-  // 3. Validation Pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       transform: true,
-      forbidNonWhitelisted: false,
+      forbidNonWhitelisted: true,
     }),
   );
 
-  // 4. Swagger OpenAPI Documentation
   const config = new DocumentBuilder()
     .setTitle('Smart PME Finance - API REST v1')
     .setDescription(

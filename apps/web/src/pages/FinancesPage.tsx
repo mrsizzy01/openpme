@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ApiClient } from '../api/client';
-import { formatCurrency, Currency, roundMoney } from '@smart-pme/shared';
+import { formatCurrency, Currency, subtractMoney, sumMoney } from '@smart-pme/shared';
 import {
   Wallet,
   ArrowDownCircle,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { isNetworkFailure, offlineSync } from '../services/offlineSync';
 import { exportToCsv } from '../utils/exportCsv';
 
 const EXPENSE_CATEGORIES = [
@@ -44,6 +45,9 @@ export const FinancesPage: React.FC = () => {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [cashRegisters, setCashRegisters] = useState<any[]>([]);
   const [currentSession, setCurrentSession] = useState<any | null>(null);
+  const [cashSessions, setCashSessions] = useState<Partial<Record<Currency, any>>>({});
+  const [cashCurrency, setCashCurrency] = useState<Currency>(Currency.CDF);
+  const [expenseCurrency, setExpenseCurrency] = useState<Currency>(Currency.CDF);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -87,16 +91,22 @@ export const FinancesPage: React.FC = () => {
     try {
       setLoading(true);
       setLoadError(null);
-      const [exps, accs, regs, session] = await Promise.all([
+      const [exps, accs, regs, session, cdfSession, usdSession] = await Promise.all([
         ApiClient.getExpenses(),
         ApiClient.getFinancialAccounts(),
         ApiClient.getCashRegisters(),
-        ApiClient.getCurrentCashSession().catch(() => null),
+        ApiClient.getCurrentCashSession(cashCurrency),
+        ApiClient.getCurrentCashSession(Currency.CDF),
+        ApiClient.getCurrentCashSession(Currency.USD),
       ]);
       setExpenses(exps);
       setAccounts(accs);
       setCashRegisters(regs);
       setCurrentSession(session);
+      setCashSessions({
+        [Currency.CDF]: cdfSession,
+        [Currency.USD]: usdSession,
+      });
       if (regs.length > 0 && !selectedRegisterId) setSelectedRegisterId(regs[0].id);
       if (accs.length > 0 && !expAccountId) setExpAccountId(accs[0].id);
     } catch (err: any) {
@@ -108,7 +118,7 @@ export const FinancesPage: React.FC = () => {
 
   useEffect(() => {
     loadFinances();
-  }, []);
+  }, [cashCurrency]);
 
   const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,27 +132,54 @@ export const FinancesPage: React.FC = () => {
       setExpError('Le bénéficiaire est obligatoire.');
       return;
     }
+    if (expMethod === 'CASH' && !cashSessions[expenseCurrency]?.id) {
+      setExpError(`Ouvrez d’abord la session de caisse ${expenseCurrency} dans Finances.`);
+      return;
+    }
     setSubmittingExpense(true);
+    const expensePayload = {
+      idempotencyKey: crypto.randomUUID(),
+      category: expCategory,
+      amount: expAmount,
+      beneficiary: expBeneficiary.trim(),
+      method: expMethod,
+      reference: expRef.trim() || undefined,
+      notes: expNotes.trim() || undefined,
+      currency: expenseCurrency,
+      cashSessionId: expMethod === 'CASH' ? cashSessions[expenseCurrency]?.id : undefined,
+      financialAccountId: expMethod === 'CASH' ? undefined : expAccountId || undefined,
+    };
     try {
-      await ApiClient.createExpense({
-        category: expCategory,
-        amount: amt,
-        beneficiary: expBeneficiary.trim(),
-        method: expMethod,
-        reference: expRef.trim() || undefined,
-        financialAccountId: expAccountId || undefined,
-        notes: expNotes.trim() || undefined,
-        currency: 'CDF',
-      });
+      await ApiClient.createExpense(expensePayload);
       setShowExpenseModal(false);
       setExpAmount('');
       setExpBeneficiary('');
       setExpRef('');
       setExpNotes('');
-      success(`Dépense de ${formatCurrency(amt, Currency.CDF)} enregistrée.`);
+      success(`Dépense de ${formatCurrency(amt, expenseCurrency)} enregistrée.`);
       loadFinances();
     } catch (err: any) {
-      setExpError(err.message || 'Erreur lors de l\'enregistrement de la dépense.');
+      if (isNetworkFailure(err)) {
+        if (expMethod !== 'CASH') {
+          setExpError('Une dépense hors espèces doit être confirmée par le service de paiement. Rétablissez la connexion avant de réessayer.');
+        } else {
+          try {
+            await offlineSync.enqueueExpense(expensePayload);
+            setShowExpenseModal(false);
+            setExpAmount('');
+            setExpBeneficiary('');
+            setExpRef('');
+            setExpNotes('');
+            success(`Dépense de ${formatCurrency(amt, expenseCurrency)} enregistrée hors-ligne. Elle sera synchronisée dès le retour du réseau.`);
+          } catch (storageError) {
+            setExpError(storageError instanceof Error
+              ? `La dépense n’a pas été enregistrée. ${storageError.message}`
+              : 'La dépense n’a pas été enregistrée : stockage hors-ligne indisponible.');
+          }
+        }
+      } else {
+        setExpError(err.message || 'Erreur lors de l\'enregistrement de la dépense.');
+      }
     } finally {
       setSubmittingExpense(false);
     }
@@ -151,8 +188,8 @@ export const FinancesPage: React.FC = () => {
   const handleOpenSession = async (e: React.FormEvent) => {
     e.preventDefault();
     setOpenError(null);
-    const bal = parseFloat(openBalance);
-    if (isNaN(bal) || bal < 0) {
+    const bal = Number(openBalance);
+    if (!Number.isFinite(bal) || bal < 0) {
       setOpenError('Le fond d\'ouverture doit être un nombre valide (0 ou plus).');
       return;
     }
@@ -164,7 +201,8 @@ export const FinancesPage: React.FC = () => {
     try {
       await ApiClient.openCashSession({
         cashRegisterId: selectedRegisterId,
-        openingBalance: bal,
+        openingBalance: openBalance,
+        currency: cashCurrency,
         notes: openNotes.trim() || undefined,
       });
       setShowOpenModal(false);
@@ -183,14 +221,14 @@ export const FinancesPage: React.FC = () => {
     e.preventDefault();
     if (!currentSession) return;
     setCloseError(null);
-    const counted = parseFloat(countedBalance);
-    if (isNaN(counted) || counted < 0) {
+    const counted = Number(countedBalance);
+    if (!Number.isFinite(counted) || counted < 0) {
       setCloseError('Veuillez saisir un solde compté valide.');
       return;
     }
     setSubmittingClose(true);
     try {
-      await ApiClient.closeCashSession(currentSession.id, counted, closeNotes.trim() || undefined);
+      await ApiClient.closeCashSession(currentSession.id, countedBalance, closeNotes.trim() || undefined);
       setShowCloseModal(false);
       setCountedBalance('');
       setCloseNotes('');
@@ -204,10 +242,19 @@ export const FinancesPage: React.FC = () => {
   };
 
   // Calculs session
-  const totalSessionCash = currentSession?.payments?.reduce((acc: number, p: any) => acc + Number(p.amount), 0) || 0;
-  const theoreticalTotal = roundMoney((Number(currentSession?.openingBalance) || 0) + totalSessionCash);
-  const countedVal = parseFloat(countedBalance) || 0;
-  const diff = roundMoney(countedVal - theoreticalTotal);
+  const totalSessionCash = sumMoney((currentSession?.payments || []).map((payment: any) => String(payment.amount)));
+  const cashMovementsIn = sumMoney((currentSession?.movements || [])
+    .filter((movement: any) => movement.type === 'IN')
+    .map((movement: any) => String(movement.amount)));
+  const cashMovementsOut = sumMoney((currentSession?.movements || [])
+    .filter((movement: any) => movement.type === 'OUT')
+    .map((movement: any) => String(movement.amount)));
+  const theoreticalTotal = subtractMoney(sumMoney([
+    String(currentSession?.openingBalance || '0'),
+    String(totalSessionCash),
+    String(cashMovementsIn),
+  ]), String(cashMovementsOut));
+  const diff = subtractMoney(countedBalance || '0', String(theoreticalTotal));
 
   if (loading) {
     return (
@@ -254,9 +301,22 @@ export const FinancesPage: React.FC = () => {
                   : <Lock size={15} color="#D97706" />}
               </div>
               <span className="card-title">
-                {currentSession ? 'Session de caisse ouverte' : 'Caisse fermée'}
+                {currentSession ? `Session ${cashCurrency} ouverte` : `Caisse ${cashCurrency} fermée`}
               </span>
             </div>
+            <select
+              aria-label="Devise de la caisse"
+              className="input-field"
+              style={{ maxWidth: '110px' }}
+              value={cashCurrency}
+              onChange={(event) => {
+                setCashCurrency(event.target.value === Currency.USD ? Currency.USD : Currency.CDF);
+                setUseBilletage(false);
+              }}
+            >
+              <option value={Currency.CDF}>CDF</option>
+              <option value={Currency.USD}>USD</option>
+            </select>
             {currentSession ? (
               <button
                 type="button"
@@ -298,6 +358,14 @@ export const FinancesPage: React.FC = () => {
                       +{formatCurrency(totalSessionCash, currentSession.currency || Currency.CDF)}
                     </span>
                   </div>
+                  {(cashMovementsIn > 0 || cashMovementsOut > 0) && (
+                    <div className="stat-line">
+                      <span className="stat-line-label">Mouvements de caisse</span>
+                      <span className="stat-line-value">
+                        {formatCurrency(subtractMoney(cashMovementsIn, cashMovementsOut), currentSession.currency)}
+                      </span>
+                    </div>
+                  )}
                   <div className="stat-line">
                     <span className="stat-line-label">Total théorique</span>
                     <span className="stat-line-value font-bold">{formatCurrency(theoreticalTotal, currentSession.currency || Currency.CDF)}</span>
@@ -491,8 +559,20 @@ export const FinancesPage: React.FC = () => {
 
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label" htmlFor="exp-amount">Montant (CDF) <span className="required">*</span></label>
-                    <input id="exp-amount" type="number" min="0.01" step="any" required className="input-field"
+                    <label className="form-label" htmlFor="exp-currency">Devise</label>
+                    <select id="exp-currency" className="input-field" value={expenseCurrency}
+                      onChange={(e) => {
+                        const currency = e.target.value === Currency.USD ? Currency.USD : Currency.CDF;
+                        setExpenseCurrency(currency);
+                        setExpAccountId(accounts.find((account: any) => account.currency === currency)?.id || '');
+                      }}>
+                      <option value={Currency.CDF}>CDF</option>
+                      <option value={Currency.USD}>USD</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="exp-amount">Montant ({expenseCurrency}) <span className="required">*</span></label>
+                    <input id="exp-amount" type="number" min="0.01" step={expenseCurrency === Currency.CDF ? '1' : '0.01'} required className="input-field"
                       placeholder="0" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} />
                   </div>
                   <div className="form-group">
@@ -521,13 +601,16 @@ export const FinancesPage: React.FC = () => {
                       placeholder="N° reçu, facture..." value={expRef}
                       onChange={(e) => setExpRef(e.target.value)} />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label" htmlFor="exp-account">Compte débité</label>
-                    <select id="exp-account" className="input-field" value={expAccountId} onChange={(e) => setExpAccountId(e.target.value)}>
-                      <option value="">— Sélectionner —</option>
-                      {accounts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
-                  </div>
+                  {expMethod !== 'CASH' && (
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="exp-account">Compte débité</label>
+                      <select id="exp-account" className="input-field" value={expAccountId} onChange={(e) => setExpAccountId(e.target.value)}>
+                        <option value="">— Sélectionner —</option>
+                        {accounts.filter((account: any) => account.currency === expenseCurrency)
+                          .map((account: any) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="form-group">
@@ -581,9 +664,9 @@ export const FinancesPage: React.FC = () => {
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="open-balance">
-                    Fond de caisse initial (CDF) <span className="required">*</span>
+                    Fond de caisse initial ({cashCurrency}) <span className="required">*</span>
                   </label>
-                  <input id="open-balance" type="number" min="0" step="any" required className="input-field"
+                  <input id="open-balance" type="number" min="0" step={cashCurrency === Currency.CDF ? '1' : '0.01'} required className="input-field"
                     placeholder="Montant compté en espèces" value={openBalance}
                     onChange={(e) => setOpenBalance(e.target.value)} />
                   <div className="form-hint">Saisissez le montant réel compté en espèces au moment de l'ouverture.</div>
@@ -635,15 +718,15 @@ export const FinancesPage: React.FC = () => {
                   <div className="totals-box" style={{ marginBottom: '16px' }}>
                     <div className="stat-line">
                       <span className="stat-line-label">Fond d'ouverture</span>
-                      <span className="stat-line-value">{formatCurrency(Number(currentSession.openingBalance), Currency.CDF)}</span>
+                      <span className="stat-line-value">{formatCurrency(Number(currentSession.openingBalance), currentSession.currency)}</span>
                     </div>
                     <div className="stat-line">
                       <span className="stat-line-label">Encaissements espèces</span>
-                      <span className="stat-line-value text-success">+{formatCurrency(totalSessionCash, Currency.CDF)}</span>
+                      <span className="stat-line-value text-success">+{formatCurrency(totalSessionCash, currentSession.currency)}</span>
                     </div>
                     <div className="stat-line" style={{ borderTop: '1px solid #E2E8F0', paddingTop: '8px', marginTop: '4px' }}>
                       <span className="stat-line-label font-semibold">Total théorique attendu</span>
-                      <span className="stat-line-value font-bold">{formatCurrency(theoreticalTotal, Currency.CDF)}</span>
+                      <span className="stat-line-value font-bold">{formatCurrency(theoreticalTotal, currentSession.currency)}</span>
                     </div>
                   </div>
                 ) : (
@@ -663,25 +746,27 @@ export const FinancesPage: React.FC = () => {
                 {/* Option Billetage */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <label className="form-label" style={{ margin: 0 }}>
-                    Solde réel compté (CDF) <span className="required">*</span>
+                    Solde réel compté ({currentSession.currency}) <span className="required">*</span>
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => setUseBilletage(!useBilletage)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#2563EB',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {useBilletage ? 'Saisie directe simple' : 'Aide au comptage (Billetage CDF)'}
-                  </button>
+                  {cashCurrency === Currency.CDF && (
+                    <button
+                      type="button"
+                      onClick={() => setUseBilletage(!useBilletage)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#2563EB',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {useBilletage ? 'Saisie directe simple' : 'Aide au comptage (Billetage CDF)'}
+                    </button>
+                  )}
                 </div>
 
-                {useBilletage ? (
+                {cashCurrency === Currency.CDF && useBilletage ? (
                   <div style={{
                     background: '#F8FAFC',
                     border: '1px solid #E2E8F0',
@@ -727,13 +812,13 @@ export const FinancesPage: React.FC = () => {
                       ))}
                     </div>
                     <div style={{ marginTop: '8px', textAlign: 'right', fontSize: '0.8rem', fontWeight: 700, color: '#0F172A' }}>
-                      Total compté : {((parseFloat(countedBalance) || 0)).toLocaleString('fr-FR')} CDF
+                      Total compté : {((parseFloat(countedBalance) || 0)).toLocaleString('fr-FR')} {currentSession.currency}
                     </div>
                   </div>
                 ) : (
                   <div className="form-group">
-                    <input id="close-balance" type="number" min="0" step="any" required className="input-field"
-                      placeholder="Ex: 850000"
+                    <input id="close-balance" type="number" min="0" step={currentSession.currency === Currency.CDF ? '1' : '0.01'} required className="input-field"
+                      placeholder={`Solde compté en ${currentSession.currency}`}
                       value={countedBalance} onChange={(e) => setCountedBalance(e.target.value)} />
                   </div>
                 )}
@@ -752,7 +837,7 @@ export const FinancesPage: React.FC = () => {
                   }}>
                     <span style={{ color: '#4B5563' }}>Écart de caisse :</span>
                     <strong style={{ color: Math.abs(diff) < 1 ? '#16A34A' : diff < 0 ? '#DC2626' : '#D97706' }}>
-                      {diff >= 0 ? '+' : ''}{formatCurrency(diff, Currency.CDF)}
+                      {diff >= 0 ? '+' : ''}{formatCurrency(diff, currentSession.currency)}
                       {Math.abs(diff) < 1 && ' — Caisse équilibrée'}
                       {diff < -1 && ' — Manquant'}
                       {diff > 1 && ' — Excédent'}

@@ -30,11 +30,13 @@ dist-electron/
 
 # Environment files
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 !.env.example
+*.pem
 
 # IDE & Editor files
 .vscode/*

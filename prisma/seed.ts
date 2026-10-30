@@ -1,14 +1,15 @@
+import 'dotenv/config';
 import { PrismaClient, Currency, UserRole } from '@prisma/client';
-import * as crypto from 'crypto';
+import { randomBytes } from 'crypto';
+import { hashPassword } from '../apps/api/src/common/security/password';
 
 const prisma = new PrismaClient();
 
-function hashPassword(password: string): string {
-  const salt = 'smart_pme_salt_2026';
-  return crypto.createHash('sha256').update(password + salt).digest('hex');
-}
-
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('The demo seed must never be run in production.');
+  }
+
   console.log('=== Initialisation de la base de données : Configuration Initiale Propre ===');
 
   // 1. Organisation principale
@@ -69,13 +70,28 @@ async function main() {
   });
 
   // 3. Taux de change officiel BCC initial
-  await prisma.exchangeRate.create({
-    data: {
+  const rateDate = new Date();
+  rateDate.setUTCHours(0, 0, 0, 0);
+  await prisma.exchangeRate.upsert({
+    where: {
+      organizationId_fromCurrency_toCurrency_effectiveDate: {
+        organizationId: org.id,
+        fromCurrency: Currency.USD,
+        toCurrency: Currency.CDF,
+        effectiveDate: rateDate,
+      },
+    },
+    update: {
+      rate: 2850.00,
+      source: 'Taux initial de développement',
+    },
+    create: {
       organizationId: org.id,
       fromCurrency: Currency.USD,
       toCurrency: Currency.CDF,
       rate: 2850.00,
-      source: 'Banque Centrale du Congo (BCC)',
+      source: 'Taux initial de développement',
+      effectiveDate: rateDate,
     },
   });
 
@@ -84,7 +100,7 @@ async function main() {
     {
       id: 'usr-admin-001',
       email: 'admin@smartpme.cd',
-      password: 'Admin@2026!',
+      password: process.env.DEMO_OWNER_PASSWORD || randomBytes(18).toString('base64url'),
       firstName: 'Directeur',
       lastName: 'Général',
       role: UserRole.ORG_OWNER,
@@ -93,7 +109,7 @@ async function main() {
     {
       id: 'usr-manager-002',
       email: 'manager@smartpme.cd',
-      password: 'Manager@2026!',
+      password: process.env.DEMO_MANAGER_PASSWORD || randomBytes(18).toString('base64url'),
       firstName: 'Responsable',
       lastName: 'Opérations',
       role: UserRole.MANAGER,
@@ -102,7 +118,7 @@ async function main() {
     {
       id: 'usr-comptable-003',
       email: 'comptable@smartpme.cd',
-      password: 'Comptable@2026!',
+      password: process.env.DEMO_ACCOUNTANT_PASSWORD || randomBytes(18).toString('base64url'),
       firstName: 'Comptable',
       lastName: 'Principal',
       role: UserRole.ACCOUNTANT,
@@ -111,7 +127,7 @@ async function main() {
     {
       id: 'usr-caissier-004',
       email: 'caissier@smartpme.cd',
-      password: 'Caissier@2026!',
+      password: process.env.DEMO_CASHIER_PASSWORD || randomBytes(18).toString('base64url'),
       firstName: 'Opérateur',
       lastName: 'Caisse',
       role: UserRole.CASHIER,
@@ -123,7 +139,7 @@ async function main() {
     await prisma.user.upsert({
       where: { email: u.email },
       update: {
-        passwordHash: hashPassword(u.password),
+        passwordHash: await hashPassword(u.password),
         firstName: u.firstName,
         lastName: u.lastName,
         role: u.role,
@@ -133,7 +149,7 @@ async function main() {
         id: u.id,
         organizationId: org.id,
         email: u.email,
-        passwordHash: hashPassword(u.password),
+        passwordHash: await hashPassword(u.password),
         firstName: u.firstName,
         lastName: u.lastName,
         role: u.role,
@@ -207,11 +223,10 @@ async function main() {
   console.log('\n--- Initialisation terminée avec succès ---');
   console.log('Base de données initialisée sans aucune fausse donnée.');
   console.log('Les stocks, ventes, factures et alertes seront créés par vos opérations réelles.');
-  console.log('Comptes de connexion :');
-  console.log('  Admin     : admin@smartpme.cd     / Admin@2026!');
-  console.log('  Manager   : manager@smartpme.cd   / Manager@2026!');
-  console.log('  Comptable : comptable@smartpme.cd / Comptable@2026!');
-  console.log('  Caissier  : caissier@smartpme.cd  / Caissier@2026!');
+  console.log('Comptes de démonstration (développement local uniquement) :');
+  for (const user of users) {
+    console.log(`  ${user.role}: ${user.email} / ${user.password}`);
+  }
 }
 
 main()

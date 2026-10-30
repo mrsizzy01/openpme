@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { ApiClient } from '../api/client';
-import { formatCurrency, Currency, roundMoney } from '@smart-pme/shared';
+import {
+  calculateInvoiceTotals,
+  calculateLine,
+  convertCurrency,
+  formatCurrency,
+  Currency,
+  PaymentMethod,
+  roundMoney,
+  subtractMoney,
+  sumMoney,
+} from '@smart-pme/shared';
 import {
   ShoppingCart,
   Search,
@@ -47,6 +57,8 @@ export const SalesPage: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<string>('CASH');
   const [paymentReference, setPaymentReference] = useState<string>('');
   const [immediatePayment, setImmediatePayment] = useState<boolean>(true);
+  const [saleCurrency, setSaleCurrency] = useState<Currency>(Currency.CDF);
+  const [cashSessions, setCashSessions] = useState<Partial<Record<Currency, any>>>({});
   const [notes, setNotes] = useState('');
   const [successSale, setSuccessSale] = useState<any | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -69,14 +81,20 @@ export const SalesPage: React.FC = () => {
     try {
       setLoading(true);
       setLoadError(null);
-      const [prods, custs, sales] = await Promise.all([
+      const [prods, custs, sales, cdfSession, usdSession] = await Promise.all([
         ApiClient.getProducts(),
         ApiClient.getCustomers(),
         ApiClient.getSales(100),
+        ApiClient.getCurrentCashSession(Currency.CDF),
+        ApiClient.getCurrentCashSession(Currency.USD),
       ]);
       setProducts(prods);
       setCustomers(custs);
       setSalesHistory(sales);
+      setCashSessions({
+        [Currency.CDF]: cdfSession,
+        [Currency.USD]: usdSession,
+      });
       if (custs.length > 0) {
         const comptant = custs.find((c: any) => c.code === 'CLI-COMPTANT');
         setSelectedCustomerId(comptant ? comptant.id : custs[0].id);
@@ -91,6 +109,13 @@ export const SalesPage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (organization?.settings?.primaryCurrency === Currency.CDF
+      || organization?.settings?.primaryCurrency === Currency.USD) {
+      setSaleCurrency(organization.settings.primaryCurrency);
+    }
+  }, [organization?.settings?.primaryCurrency]);
 
   // Écouteur global pour lecteur code-barre / douchette USB (EAN-13, Code128)
   useEffect(() => {
@@ -184,6 +209,7 @@ export const SalesPage: React.FC = () => {
           name: product.name,
           code: product.code,
           unitPrice: Number(product.salePrice),
+          currency: product.currency || Currency.CDF,
           quantity: 1,
           discountPercent: 0,
           currentStock: product.currentStock,
@@ -229,11 +255,23 @@ export const SalesPage: React.FC = () => {
   };
 
   // Calculs (côté client uniquement pour affichage — le serveur recalcule)
-  const subtotal = roundMoney(cart.reduce((acc, item) => acc + item.quantity * item.unitPrice, 0));
-  const totalDiscount = roundMoney(cart.reduce((acc, item) => acc + (item.quantity * item.unitPrice * (item.discountPercent / 100)), 0));
-  const taxable = roundMoney(subtotal - totalDiscount);
-  const taxAmount = roundMoney(taxable * (taxRate / 100));
-  const netTotal = roundMoney(taxable + taxAmount);
+  const cartTotals = calculateInvoiceTotals(cart.map((item) => ({
+    quantity: item.quantity,
+    unitPrice: convertCurrency(item.unitPrice, item.currency, saleCurrency, exchangeRate),
+    discountPercent: item.discountPercent,
+    taxRatePercent: taxRate,
+  })));
+  const subtotal = cartTotals.subtotal;
+  const totalDiscount = cartTotals.discountAmount;
+  const taxAmount = cartTotals.taxAmount;
+  const netTotal = cartTotals.total;
+
+  const cashReceivedCdf = sumMoney([
+    amountPaidCDF || '0',
+    convertCurrency(Number(amountPaidUSD || 0), Currency.USD, Currency.CDF, exchangeRate),
+  ], 0);
+  const dueCdf = convertCurrency(netTotal, saleCurrency, Currency.CDF, exchangeRate);
+  const changeAmountCdf = subtractMoney(cashReceivedCdf, dueCdf, 0);
 
   const handleInitiateMobileMoney = async () => {
     if (!mobileMoneyPhone || mobileMoneyPhone.length < 9) {
@@ -248,7 +286,7 @@ export const SalesPage: React.FC = () => {
         operator: op,
         phoneNumber: mobileMoneyPhone,
         amount: netTotal,
-        currency: 'CDF',
+        currency: saleCurrency,
       });
       setPaymentReference(res.reference);
       setMobileMoneyStatus('WAITING_PIN');
@@ -275,17 +313,60 @@ export const SalesPage: React.FC = () => {
     setSubmitting(true);
     setIsOfflineSale(false);
 
+    const cashPayments = [
+      ...(Number(amountPaidCDF) > 0
+        ? [{ amount: amountPaidCDF, currency: Currency.CDF, method: PaymentMethod.CASH }]
+        : []),
+      ...(Number(amountPaidUSD) > 0
+        ? [{ amount: amountPaidUSD, currency: Currency.USD, method: PaymentMethod.CASH }]
+        : []),
+    ].map((payment) => ({
+      ...payment,
+      cashSessionId: cashSessions[payment.currency]?.id,
+    }));
+
+    if (immediatePayment && paymentMethod === 'CASH') {
+      if (!cashPayments.length) {
+        setErrorMsg('Saisissez le montant reçu en CDF et/ou en USD.');
+        setSubmitting(false);
+        return;
+      }
+      const missingCurrency = cashPayments.find((payment) => !payment.cashSessionId)?.currency;
+      if (missingCurrency) {
+        setErrorMsg(`Ouvrez d’abord la session de caisse ${missingCurrency} dans Finances.`);
+        setSubmitting(false);
+        return;
+      }
+      if (cashReceivedCdf < dueCdf) {
+        setErrorMsg('Le montant reçu est inférieur au total de la vente.');
+        setSubmitting(false);
+        return;
+      }
+      if (changeAmountCdf > 0 && !cashSessions[Currency.CDF]?.id) {
+        setErrorMsg('Une session de caisse CDF ouverte est nécessaire pour rendre la monnaie.');
+        setSubmitting(false);
+        return;
+      }
+    }
+
     const salePayload = {
+      idempotencyKey: crypto.randomUUID(),
       customerId: selectedCustomerId,
       immediatePayment,
       paymentMethod,
       paymentReference,
-      currency: 'CDF',
+      currency: saleCurrency,
+      payments: immediatePayment
+        ? paymentMethod === 'CASH'
+          ? cashPayments
+          : [{ amount: String(netTotal), currency: saleCurrency, method: paymentMethod, reference: paymentReference }]
+        : [],
+      changeCashSessionId: changeAmountCdf > 0 ? cashSessions[Currency.CDF]?.id : undefined,
       notes: notes + (mobileMoneyPhone ? ` [Tél Mobile Money: ${mobileMoneyPhone}]` : ''),
       items: cart.map((i) => ({
         productId: i.productId,
         quantity: i.quantity,
-        unitPrice: i.unitPrice,
+        unitPrice: String(convertCurrency(i.unitPrice, i.currency, saleCurrency, exchangeRate)),
         discountPercent: i.discountPercent,
         taxRatePercent: taxRate,
       })),
@@ -293,31 +374,20 @@ export const SalesPage: React.FC = () => {
 
     // Vérifier si le navigateur est hors-ligne
     if (!navigator.onLine) {
+      if (immediatePayment && paymentMethod !== 'CASH') {
+        setErrorMsg('Un paiement par banque ou Mobile Money doit être confirmé en ligne avant la vente.');
+        setSubmitting(false);
+        return;
+      }
       try {
-        const offlineRecord = offlineSync.enqueueSale({
-          customerId: selectedCustomerId,
-          customerName: customers.find((c) => c.id === selectedCustomerId)?.name || 'Client',
-          items: cart.map((i) => ({
-            productId: i.productId,
-            productName: i.name,
-            quantity: i.quantity,
-            unitPrice: i.unitPrice,
-            total: i.quantity * i.unitPrice,
-          })),
-          subtotal,
-          taxAmount,
-          total: netTotal,
-          currency: 'CDF',
-          paymentMethod,
-          notes: salePayload.notes,
-        });
+        const offlineRecord = await offlineSync.enqueueSale(salePayload);
 
         setIsOfflineSale(true);
         setSuccessSale({
           sale: {
             saleNumber: offlineRecord.id,
             total: netTotal,
-            currency: 'CDF',
+            currency: saleCurrency,
             createdAt: offlineRecord.createdAt,
             items: cart,
           },
@@ -352,31 +422,19 @@ export const SalesPage: React.FC = () => {
       loadData();
     } catch (err: any) {
       // Si l'erreur est réseau, basculer automatiquement en enregistrement hors-ligne
-      if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError') || !navigator.onLine) {
-        const offlineRecord = offlineSync.enqueueSale({
-          customerId: selectedCustomerId,
-          customerName: customers.find((c) => c.id === selectedCustomerId)?.name || 'Client',
-          items: cart.map((i) => ({
-            productId: i.productId,
-            productName: i.name,
-            quantity: i.quantity,
-            unitPrice: i.unitPrice,
-            total: i.quantity * i.unitPrice,
-          })),
-          subtotal,
-          taxAmount,
-          total: netTotal,
-          currency: 'CDF',
-          paymentMethod,
-          notes: salePayload.notes,
-        });
+      if (err.message?.includes('inaccessible') || err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError') || !navigator.onLine) {
+        if (immediatePayment && paymentMethod !== 'CASH') {
+          setErrorMsg('Le paiement par banque ou Mobile Money n’a pas pu être confirmé. La vente n’a pas été enregistrée.');
+          return;
+        }
+        const offlineRecord = await offlineSync.enqueueSale(salePayload);
 
         setIsOfflineSale(true);
         setSuccessSale({
           sale: {
             saleNumber: offlineRecord.id,
             total: netTotal,
-            currency: 'CDF',
+            currency: saleCurrency,
             createdAt: offlineRecord.createdAt,
             items: cart,
           },
@@ -657,7 +715,14 @@ export const SalesPage: React.FC = () => {
                               />
                             </div>
                             <span style={{ fontWeight: 700, fontSize: '0.875rem', color: '#111827', fontFamily: "'JetBrains Mono', monospace" }}>
-                              {formatCurrency(roundMoney(item.quantity * item.unitPrice * (1 - item.discountPercent / 100)), Currency.CDF)}
+                              {formatCurrency(
+                                calculateLine(
+                                  item.quantity,
+                                  convertCurrency(item.unitPrice, item.currency, saleCurrency, exchangeRate),
+                                  item.discountPercent,
+                                ).total,
+                                saleCurrency,
+                              )}
                             </span>
                           </div>
                         </div>
@@ -689,6 +754,19 @@ export const SalesPage: React.FC = () => {
                       </select>
                     </div>
 
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="sale-currency">Devise de facturation</label>
+                      <select
+                        id="sale-currency"
+                        className="input-field"
+                        value={saleCurrency}
+                        onChange={(e) => setSaleCurrency(e.target.value === Currency.USD ? Currency.USD : Currency.CDF)}
+                      >
+                        <option value={Currency.CDF}>CDF — Franc Congolais</option>
+                        <option value={Currency.USD}>USD — Dollar américain</option>
+                      </select>
+                    </div>
+
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                       <div className="form-group">
                         <label className="form-label" htmlFor="sale-payment">Mode de paiement</label>
@@ -704,7 +782,6 @@ export const SalesPage: React.FC = () => {
                           <option value="MOBILE_MONEY_ORANGE">Orange Money</option>
                           <option value="BANK_TRANSFER">Virement bancaire</option>
                           <option value="CHECK">Chèque</option>
-                          <option value="CREDIT">À crédit</option>
                         </select>
                       </div>
                       <div className="form-group">
@@ -777,7 +854,7 @@ export const SalesPage: React.FC = () => {
                         style={{ width: '14px', height: '14px', cursor: 'pointer' }}
                       />
                       <label htmlFor="immPay" style={{ fontSize: '0.8125rem', color: '#4B5563', cursor: 'pointer' }}>
-                        Paiement immédiat (générer reçu automatique)
+                        Paiement immédiat (décochez pour enregistrer la vente à crédit)
                       </label>
                     </div>
 
@@ -785,33 +862,36 @@ export const SalesPage: React.FC = () => {
                     <div className="totals-box" style={{ marginBottom: '14px' }}>
                       <div className="totals-row">
                         <span>Sous-total brut</span>
-                        <span>{formatCurrency(subtotal, Currency.CDF)}</span>
+                        <span>{formatCurrency(subtotal, saleCurrency)}</span>
                       </div>
                       {totalDiscount > 0 && (
                         <div className="totals-row">
                           <span>Remise accordée</span>
-                          <span className="discount">− {formatCurrency(totalDiscount, Currency.CDF)}</span>
+                          <span className="discount">− {formatCurrency(totalDiscount, saleCurrency)}</span>
                         </div>
                       )}
                       {taxRate > 0 && (
                         <div className="totals-row">
                           <span>TVA ({taxRate}%)</span>
-                          <span>{formatCurrency(taxAmount, Currency.CDF)}</span>
+                          <span>{formatCurrency(taxAmount, saleCurrency)}</span>
                         </div>
                       )}
                       <div className="totals-row total-net" style={{ fontSize: '1.05rem', alignItems: 'baseline' }}>
                         <span>Net à payer</span>
                         <div style={{ textAlign: 'right' }}>
-                          <div>{formatCurrency(netTotal, Currency.CDF)}</div>
+                          <div>{formatCurrency(netTotal, saleCurrency)}</div>
                           <div style={{ fontSize: '0.8rem', color: '#6B7280', fontWeight: 'normal' }}>
-                            ≈ {(netTotal / exchangeRate).toFixed(2)} USD
+                            ≈ {formatCurrency(
+                              convertCurrency(netTotal, saleCurrency, saleCurrency === Currency.CDF ? Currency.USD : Currency.CDF, exchangeRate),
+                              saleCurrency === Currency.CDF ? Currency.USD : Currency.CDF,
+                            )}
                           </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Calculateur de Monnaie Bi-Devise (Espèces) */}
-                    {paymentMethod === 'CASH' && (
+                    {immediatePayment && paymentMethod === 'CASH' && (
                       <div style={{
                         background: '#F8FAFC',
                         border: '1px solid #E2E8F0',
@@ -826,8 +906,8 @@ export const SalesPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              setAmountPaidCDF(String(netTotal));
-                              setAmountPaidUSD('0');
+                              setAmountPaidCDF(saleCurrency === Currency.CDF ? String(netTotal) : '0');
+                              setAmountPaidUSD(saleCurrency === Currency.USD ? String(netTotal) : '0');
                             }}
                             className="btn btn-sm btn-secondary"
                             style={{ padding: '2px 6px', fontSize: '0.7rem' }}
@@ -843,7 +923,7 @@ export const SalesPage: React.FC = () => {
                             <input
                               type="number"
                               min="0"
-                              step="500"
+                              step="1"
                               placeholder="0 CDF"
                               className="input-field"
                               value={amountPaidCDF}
@@ -876,7 +956,7 @@ export const SalesPage: React.FC = () => {
                             <input
                               type="number"
                               min="0"
-                              step="1"
+                              step="0.01"
                               placeholder="0 USD"
                               className="input-field"
                               value={amountPaidUSD}
@@ -907,10 +987,8 @@ export const SalesPage: React.FC = () => {
 
                         {/* Rendu dynamique de la monnaie */}
                         {(() => {
-                          const pCDF = parseFloat(amountPaidCDF) || 0;
-                          const pUSD = parseFloat(amountPaidUSD) || 0;
-                          const totalPaidCDF = roundMoney(pCDF + (pUSD * exchangeRate));
-                          const diffCDF = roundMoney(totalPaidCDF - netTotal);
+                          const totalPaidCDF = cashReceivedCdf;
+                          const diffCDF = changeAmountCdf;
 
                           if (totalPaidCDF === 0) return null;
 
@@ -931,7 +1009,7 @@ export const SalesPage: React.FC = () => {
                                 </div>
                                 {diffCDF > 0 && exchangeRate > 0 && (
                                   <div style={{ fontSize: '0.75rem', color: '#166534' }}>
-                                    (soit {(diffCDF / exchangeRate).toFixed(2)} USD)
+                                    (soit {formatCurrency(convertCurrency(diffCDF, Currency.CDF, Currency.USD, exchangeRate), Currency.USD)})
                                   </div>
                                 )}
                               </div>

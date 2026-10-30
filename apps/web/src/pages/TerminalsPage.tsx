@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   Monitor,
-  Power,
   Lock,
   Unlock,
   RefreshCw,
@@ -9,11 +8,8 @@ import {
   Shield,
   Laptop,
   Radio,
-  CheckCircle2,
-  XCircle,
 } from 'lucide-react';
 import { ApiClient } from '../api/client';
-import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
 interface Terminal {
@@ -26,18 +22,20 @@ interface Terminal {
   ipAddress: string;
   lastPing: string;
   status: 'ONLINE' | 'LOCKED' | 'OFFLINE';
-  pendingCommand: 'NONE' | 'LOCK' | 'UNLOCK' | 'KILL' | 'MESSAGE';
-  commandMessage?: string;
+  lockReason?: string | null;
+  commandAcknowledged?: boolean;
+  stateVersion?: number;
+  lastAcknowledgedAt?: string | null;
+  tokenRevoked?: boolean;
   cashSessionId?: string;
 }
 
 export const TerminalsPage: React.FC = () => {
-  const { user } = useAuth();
   const [terminals, setTerminals] = useState<Terminal[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null);
-  const [actionType, setActionType] = useState<'LOCK' | 'KILL' | 'KILL_ALL' | null>(null);
+  const [actionType, setActionType] = useState<'LOCK' | 'UNLOCK' | 'REVOKE' | null>(null);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -62,31 +60,31 @@ export const TerminalsPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [autoRefresh]);
 
-  const handleOpenActionModal = (term: Terminal | null, type: 'LOCK' | 'KILL' | 'KILL_ALL') => {
+  const handleOpenActionModal = (term: Terminal, type: 'LOCK' | 'REVOKE' = 'LOCK') => {
     setSelectedTerminal(term);
     setActionType(type);
-    if (type === 'KILL_ALL') {
-      setReason("Arrêt d'urgence de l'ensemble des caisses ordonné par la Direction.");
-    } else if (type === 'KILL') {
-      setReason("Fermeture administrative ordonnée par la Direction.");
-    } else {
-      setReason("Poste temporairement verrouillé pour vérification.");
-    }
+    setReason(type === 'LOCK'
+      ? 'Poste temporairement verrouillé pour vérification.'
+      : 'Révocation administrative du poste.');
   };
 
   const handleConfirmAction = async () => {
-    if (!actionType) return;
+    if (!actionType || !selectedTerminal || !reason.trim()) return;
     setSubmitting(true);
     try {
-      if (actionType === 'KILL_ALL') {
-        await ApiClient.killTerminal('ALL', reason);
-        warning("Ordre d'extinction d'urgence transmis à toutes les caisses !");
-      } else if (actionType === 'LOCK' && selectedTerminal) {
-        await ApiClient.lockTerminal(selectedTerminal.id, reason);
-        success(`Poste ${selectedTerminal.id} verrouillé avec succès.`);
-      } else if (actionType === 'KILL' && selectedTerminal) {
-        await ApiClient.killTerminal(selectedTerminal.id, reason);
-        warning(`Ordre de fermeture immédiate (Killswitch) envoyé au poste ${selectedTerminal.id}`);
+      const result = actionType === 'LOCK'
+        ? await ApiClient.lockTerminal(selectedTerminal.id, reason.trim())
+        : actionType === 'UNLOCK'
+          ? await ApiClient.unlockTerminal(selectedTerminal.id, reason.trim())
+          : await ApiClient.revokeTerminal(selectedTerminal.id, reason.trim());
+      const actionLabel = actionType === 'LOCK'
+        ? 'Verrouillage'
+        : actionType === 'UNLOCK' ? 'Déverrouillage' : 'Révocation';
+      if (result.acknowledged) success(`${actionLabel} appliqué sur ${selectedTerminal.id}.`);
+      else if (actionType === 'REVOKE') {
+        warning(`Jeton de ${selectedTerminal.id} révoqué; le poste doit être réenrôlé pour se reconnecter.`);
+      } else {
+        warning(`${actionLabel} envoyé; application en attente de confirmation du poste.`);
       }
       setSelectedTerminal(null);
       setActionType(null);
@@ -98,17 +96,8 @@ export const TerminalsPage: React.FC = () => {
     }
   };
 
-  const handleUnlock = async (terminalId: string) => {
-    try {
-      await ApiClient.unlockTerminal(terminalId);
-      success(`Poste ${terminalId} déverrouillé avec succès.`);
-      await fetchTerminals();
-    } catch (err: any) {
-      error(err.message || 'Erreur lors du déverrouillage.');
-    }
-  };
-
-  const formatLastPing = (dateStr: string) => {
+  const formatLastPing = (dateStr?: string | null) => {
+    if (!dateStr) return 'Aucun signal reçu';
     try {
       const ping = new Date(dateStr).getTime();
       const diffSec = Math.floor((Date.now() - ping) / 1000);
@@ -191,29 +180,6 @@ export const TerminalsPage: React.FC = () => {
 
         {/* Boutons d'actions */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          {/* Bouton d'arrêt d'urgence général */}
-          {onlineTerminals.length > 0 && (
-            <button
-              type="button"
-              onClick={() => handleOpenActionModal(null, 'KILL_ALL')}
-              className="btn"
-              style={{
-                background: '#DC2626',
-                color: 'white',
-                border: 'none',
-                fontWeight: 700,
-                fontSize: '13px',
-                padding: '8px 16px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                boxShadow: '0 2px 4px rgba(220, 38, 38, 0.2)'
-              }}
-            >
-              <Power size={16} /> Arrêter Toutes les Caisses
-            </button>
-          )}
-
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
             className="btn btn-secondary"
@@ -248,7 +214,7 @@ export const TerminalsPage: React.FC = () => {
         <Shield size={20} color="#0284C7" style={{ flexShrink: 0 }} />
         <div>
           <b>Supervision & Contrôle à Distance :</b> Cet écran vous permet de surveiller en direct l'état des postes caisse Windows connectés.
-          Vous pouvez <b>fermer instantanément le logiciel à distance</b> ou <b>verrouiller l'écran de caisse</b> en 1 clic.
+          Vous pouvez verrouiller ou déverrouiller un poste sans arrêter l'application. Les commandes en attente affichent leur état d'acquittement.
         </div>
       </div>
 
@@ -413,9 +379,17 @@ export const TerminalsPage: React.FC = () => {
 
                     <td style={{ textAlign: 'right', paddingRight: '18px' }}>
                       <div style={{ display: 'inline-flex', gap: '8px' }}>
-                        {isLocked ? (
+                        {term.tokenRevoked ? (
+                          <span style={{ fontSize: '11px', fontWeight: 700, color: '#B91C1C' }}>
+                            Jeton révoqué · réenrôlement requis
+                          </span>
+                        ) : isLocked ? (
                           <button
-                            onClick={() => handleUnlock(term.id)}
+                            onClick={() => {
+                              setSelectedTerminal(term);
+                              setActionType('UNLOCK');
+                              setReason('');
+                            }}
                             className="btn btn-secondary"
                             style={{
                               padding: '6px 12px',
@@ -433,7 +407,7 @@ export const TerminalsPage: React.FC = () => {
                           </button>
                         ) : (
                           <button
-                            onClick={() => handleOpenActionModal(term, 'LOCK')}
+                            onClick={() => handleOpenActionModal(term)}
                             className="btn btn-secondary"
                             style={{
                               padding: '6px 12px',
@@ -450,24 +424,25 @@ export const TerminalsPage: React.FC = () => {
                             <Lock size={14} /> Verrouiller
                           </button>
                         )}
-
-                        <button
-                          onClick={() => handleOpenActionModal(term, 'KILL')}
-                          className="btn"
-                          style={{
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            background: '#DC2626',
-                            color: 'white',
-                            border: 'none',
-                          }}
-                        >
-                          <Power size={14} /> Fermer à distance
-                        </button>
+                        {!term.tokenRevoked && (
+                          <>
+                            <button
+                              onClick={() => handleOpenActionModal(term, 'REVOKE')}
+                              className="btn btn-secondary"
+                              style={{
+                                padding: '6px 10px',
+                                fontSize: '11px',
+                                color: '#B91C1C',
+                                borderColor: '#FECACA',
+                              }}
+                            >
+                              Révoquer
+                            </button>
+                            <div style={{ fontSize: '11px', color: term.commandAcknowledged ? '#15803D' : '#B45309' }}>
+                              {term.commandAcknowledged ? 'État appliqué' : 'En attente du poste'}
+                            </div>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -478,52 +453,37 @@ export const TerminalsPage: React.FC = () => {
         </table>
       </div>
 
-      {/* Modal de Confirmation d'Action (Lock, Kill individuel ou Arrêt d'Urgence Global) */}
+      {/* Confirmation de changement d'état */}
       {actionType && (
         <div className="modal-backdrop">
           <div className="modal" style={{ maxWidth: '480px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
-              {actionType === 'LOCK' ? (
-                <div style={{ background: '#FEF3C7', padding: '10px', borderRadius: '50%', color: '#D97706' }}>
-                  <Lock size={24} />
-                </div>
-              ) : (
-                <div style={{ background: '#FEE2E2', padding: '10px', borderRadius: '50%', color: '#DC2626' }}>
-                  <Power size={24} />
-                </div>
-              )}
+              <div style={{
+                background: actionType === 'LOCK' ? '#FEF3C7' : actionType === 'UNLOCK' ? '#DCFCE7' : '#FEE2E2',
+                padding: '10px',
+                borderRadius: '50%',
+                color: actionType === 'LOCK' ? '#D97706' : actionType === 'UNLOCK' ? '#15803D' : '#B91C1C',
+              }}>
+                {actionType === 'LOCK' ? <Lock size={24} /> : actionType === 'UNLOCK' ? <Unlock size={24} /> : <AlertTriangle size={24} />}
+              </div>
               <div>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800 }}>
-                  {actionType === 'KILL_ALL'
-                    ? "Arrêt d'Urgence de Toutes les Caisses"
-                    : actionType === 'KILL'
-                    ? 'Fermer le Logiciel à Distance'
-                    : 'Verrouiller le Poste'}
+                  {actionType === 'LOCK'
+                    ? 'Verrouiller le poste'
+                    : actionType === 'UNLOCK' ? 'Déverrouiller le poste' : 'Révoquer le poste'}
                 </h3>
                 <span style={{ fontSize: '12px', color: '#64748B' }}>
-                  {actionType === 'KILL_ALL'
-                    ? "Tous les postes de caisse Windows connectés"
-                    : `Poste cible : ${selectedTerminal?.id}`}
+                  Poste cible : {selectedTerminal?.id}
                 </span>
               </div>
             </div>
 
             <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
-              {actionType === 'KILL_ALL' ? (
-                <>
-                  <b style={{ color: '#DC2626' }}>Attention :</b> Cette commande transmet un ordre d'arrêt immédiat
-                  (Killswitch) à <b>toutes les caisses actives</b>. L'application desktop de chaque caissier se fermera instantanément.
-                </>
-              ) : actionType === 'KILL' ? (
-                <>
-                  Cette commande ordonne l'<b>extinction immédiate</b> de l'application desktop sur le poste cible.
-                  L'application se fermera automatiquement sur l'écran du caissier.
-                </>
-              ) : (
-                <>
-                  Un écran de sécurité bloquant s'affichera immédiatement sur le poste. L'opérateur ne pourra plus manipuler la caisse.
-                </>
-              )}
+              {actionType === 'LOCK'
+                ? "Un écran de verrouillage s'affichera sur le poste. L'application restera active pour permettre le déverrouillage à distance."
+                : actionType === 'UNLOCK'
+                  ? "Le poste retrouvera son accès dès qu'il recevra cette commande. Une reconnexion utilisateur pourra être demandée."
+                  : "Le jeton de sécurité sera invalidé immédiatement. Le poste restera bloqué et devra être réenrôlé localement par un administrateur autorisé."}
             </p>
 
             <div style={{ marginTop: '14px' }}>
@@ -536,7 +496,7 @@ export const TerminalsPage: React.FC = () => {
                 rows={2}
                 className="input"
                 style={{ width: '100%', resize: 'none', fontSize: '13px' }}
-                placeholder="Raison de la fermeture..."
+                placeholder="Motif administratif..."
               />
             </div>
 
@@ -555,10 +515,10 @@ export const TerminalsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleConfirmAction}
-                disabled={submitting}
+                disabled={submitting || !reason.trim()}
                 className="btn"
                 style={{
-                  background: actionType === 'LOCK' ? '#D97706' : '#DC2626',
+                  background: actionType === 'LOCK' ? '#D97706' : actionType === 'UNLOCK' ? '#15803D' : '#B91C1C',
                   color: 'white',
                   border: 'none',
                   fontWeight: 700,
@@ -571,11 +531,15 @@ export const TerminalsPage: React.FC = () => {
                   'Exécution...'
                 ) : actionType === 'LOCK' ? (
                   <>
-                    <Lock size={15} /> Confirmer le Verrouillage
+                    <Lock size={15} /> Confirmer le verrouillage
+                  </>
+                ) : actionType === 'UNLOCK' ? (
+                  <>
+                    <Unlock size={15} /> Confirmer le déverrouillage
                   </>
                 ) : (
                   <>
-                    <Power size={15} /> Exécuter la Fermeture Forcée
+                    <AlertTriangle size={15} /> Confirmer la révocation
                   </>
                 )}
               </button>

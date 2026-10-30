@@ -1,106 +1,175 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Ip,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
+import { IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { UserRole } from '@prisma/client';
 import { RemoteControlService } from './remote-control.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { UserRole } from '@prisma/client';
+
+class EnrollDesktopDto {
+  @ApiProperty({ example: 'DESKTOP-CAISSE-01' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  terminalId: string;
+
+  @ApiProperty({ description: 'Identifiant de l’entreprise configurée sur le poste' })
+  @IsString()
+  @IsNotEmpty()
+  organizationId: string;
+
+  @ApiProperty({ example: 'Caisse principale' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  displayName: string;
+}
+
+class HeartbeatDto {
+  @ApiProperty({ required: false, description: 'Version de statut appliquée localement' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  acknowledgedVersion?: number;
+}
+
+class TerminalActionDto {
+  @ApiProperty({ example: 'Vérification administrative' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason: string;
+}
 
 @ApiTags('Remote Control & Supervision')
 @Controller('remote-control')
 export class RemoteControlController {
   constructor(private remoteControlService: RemoteControlService) {}
 
-  /**
-   * Heartbeat envoyé par les applications Desktop PyQt6 et Web POS
-   */
-  @Post('heartbeat')
-  @ApiOperation({ summary: 'Signal de présence et réception des ordres à distance' })
-  async heartbeat(
-    @Body() body: {
-      terminalId: string;
-      organizationId: string;
-      userId?: string;
-      clientType?: 'DESKTOP_PYQT' | 'WEB_POS' | 'BROWSER';
-    },
-    @Req() req: any,
+  @Post('enroll')
+  @ApiOperation({ summary: 'Enrôler un poste desktop avec un jeton distinct et révocable' })
+  async enroll(
+    @Body() body: EnrollDesktopDto,
+    @Headers('x-desktop-enrollment-key') enrollmentKey: string,
   ) {
-    const ip = req.ip || req.connection?.remoteAddress || '127.0.0.1';
-    return this.remoteControlService.registerHeartbeat({
-      ...body,
-      ipAddress: ip,
-    });
+    return this.remoteControlService.enrollTerminal(enrollmentKey, body);
   }
 
-  /**
-   * Liste des terminaux actifs de l'entreprise
-   */
+  @Post('heartbeat')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Heartbeat authentifié et accusé de réception de l’état du poste' })
+  async heartbeat(
+    @Headers('authorization') authorization: string,
+    @Body() body: HeartbeatDto,
+    @Ip() ipAddress: string,
+  ) {
+    const token = authorization?.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length)
+      : undefined;
+    return this.remoteControlService.heartbeat(token, body, ipAddress || 'unknown');
+  }
+
   @Get('terminals')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Superviser les postes de travail connectés en direct' })
-  async listTerminals(@CurrentUser('organizationId') orgId: string) {
-    return this.remoteControlService.listTerminals(orgId);
+  @ApiOperation({ summary: 'Lister les postes enregistrés de l’entreprise courante' })
+  async listTerminals(@CurrentUser('organizationId') organizationId: string) {
+    return this.remoteControlService.listTerminals(organizationId);
   }
 
-  /**
-   * Verrouiller un poste à distance
-   */
   @Post('terminals/:id/lock')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Verrouiller l\'écran d\'un poste de caisse à distance' })
+  @ApiOperation({ summary: 'Verrouiller un poste et inscrire l’action dans le journal d’audit' })
   async lockTerminal(
-    @CurrentUser('organizationId') orgId: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser('id') actorId: string,
     @Param('id') terminalId: string,
-    @Body() body: { reason?: string },
+    @Body() body: TerminalActionDto,
+    @Ip() ipAddress: string,
   ) {
-    return this.remoteControlService.lockTerminal(orgId, terminalId, body?.reason);
+    return this.remoteControlService.lockTerminal(
+      organizationId,
+      terminalId,
+      actorId,
+      body.reason,
+      ipAddress || 'unknown',
+    );
   }
 
-  /**
-   * Déverrouiller un poste à distance
-   */
   @Post('terminals/:id/unlock')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Déverrouiller un poste de caisse à distance' })
+  @ApiOperation({ summary: 'Déverrouiller un poste et inscrire l’action dans le journal d’audit' })
   async unlockTerminal(
-    @CurrentUser('organizationId') orgId: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser('id') actorId: string,
     @Param('id') terminalId: string,
+    @Body() body: TerminalActionDto,
+    @Ip() ipAddress: string,
   ) {
-    return this.remoteControlService.unlockTerminal(orgId, terminalId);
+    return this.remoteControlService.unlockTerminal(
+      organizationId,
+      terminalId,
+      actorId,
+      body.reason,
+      ipAddress || 'unknown',
+    );
   }
 
-  /**
-   * Fermer / Déconnecter le logiciel à distance (Kill switch)
-   */
+  @Post('terminals/:id/revoke')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Révoquer le jeton du poste et bloquer ses sessions desktop' })
+  async revokeTerminal(
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser('id') actorId: string,
+    @Param('id') terminalId: string,
+    @Body() body: TerminalActionDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.remoteControlService.revokeTerminal(
+      organizationId,
+      terminalId,
+      actorId,
+      body.reason,
+      ipAddress || 'unknown',
+    );
+  }
+
   @Post('terminals/:id/kill')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Forcer la fermeture et déconnexion du logiciel à distance' })
+  @ApiOperation({ summary: 'Mettre le poste en verrouillage d’urgence sans arrêter le client' })
   async killTerminal(
-    @CurrentUser('organizationId') orgId: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser('id') actorId: string,
     @Param('id') terminalId: string,
-    @Body() body: { reason?: string },
+    @Body() body: TerminalActionDto,
+    @Ip() ipAddress: string,
   ) {
-    return this.remoteControlService.killTerminal(orgId, terminalId, body?.reason);
-  }
-
-  /**
-   * Notification de déconnexion volontaire ou forcée d'un terminal
-   */
-  @Post('terminals/:id/logout')
-  @ApiOperation({ summary: 'Déconnecter le terminal et fermer la session active' })
-  async logoutTerminal(
-    @Param('id') terminalId: string,
-    @Body() body: { reason?: string },
-  ) {
-    return this.remoteControlService.logoutTerminal(terminalId, body?.reason);
+    return this.remoteControlService.lockTerminal(
+      organizationId,
+      terminalId,
+      actorId,
+      body.reason,
+      ipAddress || 'unknown',
+    );
   }
 }

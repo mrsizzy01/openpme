@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext';
 import { exportToCsv } from '../utils/exportCsv';
 import { QRCodeDisplay } from '../components/QRCodeDisplay';
 import { printThermalReceiptWeb } from '../utils/escpos';
+import { isNetworkFailure, offlineSync } from '../services/offlineSync';
 
 const statusLabels: Record<string, string> = {
   PAID: 'Payée',
@@ -40,6 +41,9 @@ export const InvoicesPage: React.FC = () => {
   const [paymentAmount, setPaymentAmount] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<string>('CASH');
   const [paymentRef, setPaymentRef] = useState<string>('');
+  const [paymentCashSessionId, setPaymentCashSessionId] = useState<string | undefined>();
+  const [cashSessionIds, setCashSessionIds] = useState<Record<string, string>>({});
+  const [cashSessionLoadError, setCashSessionLoadError] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [submittingPayment, setSubmittingPayment] = useState(false);
 
@@ -60,11 +64,47 @@ export const InvoicesPage: React.FC = () => {
     loadInvoices();
   }, [statusFilter]);
 
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      ApiClient.getCurrentCashSession('CDF'),
+      ApiClient.getCurrentCashSession('USD'),
+    ]).then(([cdfSession, usdSession]) => {
+      if (active) {
+        setCashSessionIds({
+          CDF: cdfSession?.id,
+          USD: usdSession?.id,
+        });
+        setCashSessionLoadError(null);
+      }
+    }).catch((error: unknown) => {
+      if (active) {
+        setCashSessionIds({});
+        setCashSessionLoadError(error instanceof Error ? error.message : 'Impossible de vérifier la session de caisse.');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const handleOpenPayment = (inv: any) => {
     setPaymentInvoice(inv);
     setPaymentAmount(String(Number(inv.balance).toFixed(2)));
     setPaymentRef('');
     setPaymentError(null);
+    setPaymentCashSessionId(cashSessionIds[inv.currency]);
+    if (!cashSessionIds[inv.currency]) {
+      void ApiClient.getCurrentCashSession(inv.currency)
+        .then((session) => {
+          setCashSessionIds((current) => ({ ...current, [inv.currency]: session?.id }));
+          setPaymentCashSessionId(session?.id);
+          setCashSessionLoadError(null);
+        })
+        .catch((error: unknown) => {
+          setCashSessionLoadError(error instanceof Error ? error.message : 'Impossible de vérifier la session de caisse.');
+        });
+    }
   };
 
   const handleRecordPayment = async (e: React.FormEvent) => {
@@ -81,22 +121,51 @@ export const InvoicesPage: React.FC = () => {
       setPaymentError(`Le montant ne peut pas dépasser le solde restant (${formatCurrency(Number(paymentInvoice.balance), paymentInvoice.currency)}).`);
       return;
     }
+    if (paymentMethod === 'CASH' && !paymentCashSessionId) {
+      setPaymentError(`Aucune session de caisse ${paymentInvoice.currency} n’est disponible. Vérifiez que la caisse est ouverte, puis réessayez.`);
+      return;
+    }
 
     setSubmittingPayment(true);
+    const paymentPayload = {
+      idempotencyKey: crypto.randomUUID(),
+      invoiceId: paymentInvoice.id,
+      customerId: paymentInvoice.customerId,
+      amount: paymentAmount,
+      method: paymentMethod,
+      reference: paymentRef.trim() || undefined,
+      currency: paymentInvoice.currency,
+      cashSessionId: paymentMethod === 'CASH' ? paymentCashSessionId : undefined,
+    };
     try {
-      await ApiClient.createPayment({
-        invoiceId: paymentInvoice.id,
-        customerId: paymentInvoice.customerId,
-        amount: amt,
-        method: paymentMethod,
-        reference: paymentRef.trim() || undefined,
-        currency: paymentInvoice.currency,
-      });
+      await ApiClient.createPayment(paymentPayload);
       setPaymentInvoice(null);
       success(`Règlement de ${formatCurrency(amt, paymentInvoice.currency)} enregistré avec succès.`);
       loadInvoices();
     } catch (err: any) {
-      setPaymentError(err.message || 'Erreur lors de l\'enregistrement du règlement.');
+      if (isNetworkFailure(err)) {
+        if (paymentMethod !== 'CASH') {
+          setPaymentError('Un paiement par banque ou Mobile Money doit être confirmé en ligne. Aucun règlement n’a été enregistré.');
+        } else if (!paymentCashSessionId) {
+          setPaymentError(
+            `Aucune session de caisse ${paymentInvoice.currency} n’est disponible. Ouvrez la caisse en ligne avant d’enregistrer ce règlement.${
+              cashSessionLoadError ? ` ${cashSessionLoadError}` : ''
+            }`,
+          );
+        } else {
+          try {
+            await offlineSync.enqueuePayment(paymentPayload);
+            setPaymentInvoice(null);
+            success(`Règlement de ${formatCurrency(amt, paymentInvoice.currency)} enregistré hors-ligne. Il sera synchronisé dès le retour du réseau.`);
+          } catch (storageError) {
+            setPaymentError(storageError instanceof Error
+              ? `Le règlement n’a pas été enregistré. ${storageError.message}`
+              : 'Le règlement n’a pas été enregistré : stockage hors-ligne indisponible.');
+          }
+        }
+      } else {
+        setPaymentError(err.message || 'Erreur lors de l\'enregistrement du règlement.');
+      }
     } finally {
       setSubmittingPayment(false);
     }

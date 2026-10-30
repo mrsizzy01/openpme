@@ -15,6 +15,7 @@ export class CustomersController {
   constructor(private customersService: CustomersService) {}
 
   @Get()
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.CASHIER, UserRole.SALES_REP)
   @ApiOperation({ summary: 'Lister les clients avec recherche' })
   @ApiQuery({ name: 'search', required: false })
   async findAll(@CurrentUser('organizationId') orgId: string, @Query('search') search?: string) {
@@ -22,18 +23,21 @@ export class CustomersController {
   }
 
   @Get(':id')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.CASHIER, UserRole.SALES_REP)
   @ApiOperation({ summary: 'Obtenir la fiche client avec son historique de facturation et paiements' })
   async findById(@CurrentUser('organizationId') orgId: string, @Param('id') id: string) {
     return this.customersService.findById(orgId, id);
   }
 
   @Post()
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.CASHIER, UserRole.SALES_REP)
   @ApiOperation({ summary: 'Créer un nouveau client' })
   async create(@CurrentUser('organizationId') orgId: string, @Body() body: any) {
     return this.customersService.create(orgId, body);
   }
 
   @Patch(':id')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.CASHIER, UserRole.SALES_REP)
   @ApiOperation({ summary: 'Mettre à jour un client' })
   async update(
     @CurrentUser('organizationId') orgId: string,

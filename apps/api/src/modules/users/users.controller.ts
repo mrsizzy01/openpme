@@ -15,7 +15,7 @@ export class UsersController {
   constructor(private usersService: UsersService) {}
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.AUDITOR)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiOperation({ summary: 'Lister les collaborateurs et leurs rôles RBAC' })
   async findAll(@CurrentUser('organizationId') orgId: string) {
     return this.usersService.findAll(orgId);
@@ -50,6 +50,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Modifier les informations, réinitialiser le mot de passe ou changer le rôle' })
   async update(
     @CurrentUser('organizationId') orgId: string,
+    @CurrentUser('id') currentUserId: string,
     @Param('id') id: string,
     @Body() body: {
       firstName?: string;
@@ -57,14 +58,24 @@ export class UsersController {
       role?: UserRole;
       phone?: string;
       isActive?: boolean;
-      password?: string;
     },
   ) {
-    return this.usersService.update(orgId, id, body);
+    return this.usersService.update(orgId, currentUserId, id, body);
+  }
+
+  @Post(':id/reset-password')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Générer un nouveau mot de passe, retourné une seule fois' })
+  async resetPassword(
+    @CurrentUser('organizationId') orgId: string,
+    @CurrentUser('id') currentUserId: string,
+    @Param('id') id: string,
+  ) {
+    return this.usersService.resetPassword(orgId, currentUserId, id);
   }
 
   @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER)
   @ApiOperation({ summary: 'Désactiver un compte collaborateur' })
   async remove(
     @CurrentUser('organizationId') orgId: string,

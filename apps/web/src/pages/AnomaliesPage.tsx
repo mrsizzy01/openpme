@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 
 const statusLabels: Record<string, string> = {
   DETECTED: 'Détectée',
@@ -39,6 +40,8 @@ const borderColor: Record<string, string> = {
 };
 
 export const AnomaliesPage: React.FC = () => {
+  const { user } = useAuth();
+  const canManageAnomalies = user?.role !== 'AUDITOR';
   const { success, error: toastError } = useToast();
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState('');
@@ -128,7 +131,7 @@ export const AnomaliesPage: React.FC = () => {
   return (
     <div>
       {/* KPIs */}
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: '20px' }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: `repeat(${canManageAnomalies ? 4 : 3}, 1fr)`, marginBottom: '20px' }}>
         <div className="kpi-card" style={{ borderTop: '3px solid #DC2626' }}>
           <div className="kpi-label">Critiques</div>
           <div className="kpi-value" style={{ color: criticalCount > 0 ? '#DC2626' : '#111827' }}>{criticalCount}</div>
@@ -144,30 +147,32 @@ export const AnomaliesPage: React.FC = () => {
           <div className="kpi-value">{totalActive}</div>
           <div className="kpi-sub">À examiner</div>
         </div>
-        <div className="kpi-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'stretch' }}>
-          <button
-            type="button"
-            onClick={handleScan}
-            disabled={scanning}
-            className="btn btn-primary"
-            style={{ width: '100%' }}
-          >
-            {scanning ? (
-              <>
-                <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px', borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
-                Analyse en cours...
-              </>
-            ) : (
-              <>
-                <RefreshCw size={14} />
-                Lancer le scan des règles
-              </>
+        {canManageAnomalies && (
+          <div className="kpi-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'stretch' }}>
+            <button
+              type="button"
+              onClick={handleScan}
+              disabled={scanning}
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+            >
+              {scanning ? (
+                <>
+                  <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px', borderColor: 'rgba(255,255,255,0.3)', borderTopColor: '#fff' }} />
+                  Analyse en cours...
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={14} />
+                  Lancer le scan des règles
+                </>
+              )}
+            </button>
+            {scanResult && (
+              <div style={{ fontSize: '0.6875rem', color: '#16A34A', marginTop: '6px', textAlign: 'center' }}>{scanResult}</div>
             )}
-          </button>
-          {scanResult && (
-            <div style={{ fontSize: '0.6875rem', color: '#16A34A', marginTop: '6px', textAlign: 'center' }}>{scanResult}</div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Filtres par statut */}
@@ -290,7 +295,7 @@ export const AnomaliesPage: React.FC = () => {
                   )}
 
                   {/* Actions */}
-                  {!isResolved && (
+                  {!isResolved && canManageAnomalies && (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                       <button
                         type="button"
@@ -320,7 +325,7 @@ export const AnomaliesPage: React.FC = () => {
       )}
 
       {/* Modal résolution */}
-      {selectedAnomaly && (
+      {selectedAnomaly && canManageAnomalies && (
         <div className="modal-overlay">
           <div className="modal">
             <div className="modal-header">

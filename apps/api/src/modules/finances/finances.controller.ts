@@ -1,12 +1,19 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { FinancesService } from './finances.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { UserRole } from '@prisma/client';
+import { CloseCashSessionDto, OpenCashSessionDto } from './cash-session.dto';
+import { CreateExpenseDto } from './expense.dto';
+import { Currency } from '@prisma/client';
 
 @ApiTags('Finances & Cash Management')
 @Controller('finances')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.CASHIER)
 @ApiBearerAuth()
 export class FinancesController {
   constructor(private financesService: FinancesService) {}
@@ -22,7 +29,7 @@ export class FinancesController {
   async createExpense(
     @CurrentUser('organizationId') orgId: string,
     @CurrentUser('id') userId: string,
-    @Body() body: any,
+    @Body() body: CreateExpenseDto,
   ) {
     return this.financesService.createExpense(orgId, userId, body);
   }
@@ -38,8 +45,9 @@ export class FinancesController {
   async getCurrentSession(
     @CurrentUser('organizationId') orgId: string,
     @CurrentUser('id') userId: string,
+    @Query('currency') currency?: Currency,
   ) {
-    return this.financesService.getCurrentSession(orgId, userId);
+    return this.financesService.getCurrentSession(orgId, userId, currency);
   }
 
   @Post('cash-sessions/open')
@@ -47,7 +55,7 @@ export class FinancesController {
   async openSession(
     @CurrentUser('organizationId') orgId: string,
     @CurrentUser('id') userId: string,
-    @Body() body: any,
+    @Body() body: OpenCashSessionDto,
   ) {
     return this.financesService.openSession(orgId, userId, body);
   }
@@ -57,7 +65,7 @@ export class FinancesController {
   async closeSession(
     @CurrentUser('organizationId') orgId: string,
     @Param('id') id: string,
-    @Body() body: { closingCountedBalance: number; notes?: string },
+    @Body() body: CloseCashSessionDto,
   ) {
     return this.financesService.closeSession(orgId, id, body.closingCountedBalance, body.notes);
   }

@@ -2,12 +2,12 @@ import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-vali
 import { ApiProperty } from '@nestjs/swagger';
 
 export class LoginDto {
-  @ApiProperty({ example: 'admin@smartpme.cd', description: 'Adresse email de connexion' })
+  @ApiProperty({ example: 'nom@entreprise.cd', description: 'Adresse email de connexion' })
   @IsEmail({}, { message: 'Format d’email invalide' })
   @IsNotEmpty({ message: 'L’email est requis' })
   email: string;
 
-  @ApiProperty({ example: 'Admin@2026!', description: 'Mot de passe' })
+  @ApiProperty({ description: 'Mot de passe du compte' })
   @IsString()
   @IsNotEmpty({ message: 'Le mot de passe est requis' })
   @MinLength(6, { message: 'Le mot de passe doit contenir au moins 6 caractères' })
@@ -25,7 +25,7 @@ export class RegisterOrganizationDto {
   @IsNotEmpty()
   email: string;
 
-  @ApiProperty({ example: 'Secret@2026!' })
+  @ApiProperty({ description: 'Mot de passe choisi pour le nouveau compte administrateur' })
   @IsString()
   @MinLength(6)
   password: string;

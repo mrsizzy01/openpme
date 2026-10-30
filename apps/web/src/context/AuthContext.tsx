@@ -8,7 +8,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, pass: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateExchangeRate: (newRate: number) => Promise<void>;
 }
@@ -33,13 +33,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Initialisation session
   useEffect(() => {
-    const token = localStorage.getItem('smart_pme_token');
-    if (token) {
-      ApiClient.getMe()
+    ApiClient.restoreSession()
         .then((res) => {
           setUser(res.user);
           setOrganization(res.organization);
-          ApiClient.setAuth(token, res.user, res.organization);
         })
         .catch(() => {
           ApiClient.clearAuth();
@@ -47,9 +44,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setOrganization(null);
         })
         .finally(() => setIsLoading(false));
-    } else {
-      setIsLoading(false);
-    }
   }, []);
 
   // Détection & synchronisation temps réel inter-onglets et Desktop via BroadcastChannel
@@ -74,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 exchangeRateUsdToCdf: numRate,
               },
             };
-            const token = localStorage.getItem('smart_pme_token') || '';
+            const token = ApiClient.getAccessToken() || '';
             ApiClient.setAuth(token, ApiClient.getSavedUser(), updated);
             return updated;
           });
@@ -101,7 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           currentRateRef.current = serverRate;
           setUser(res.user);
           setOrganization(res.organization);
-          const token = localStorage.getItem('smart_pme_token') || '';
+          const token = ApiClient.getAccessToken() || '';
           ApiClient.setAuth(token, res.user, res.organization);
 
           // Propagation immédiate aux autres fenêtres/desktop
@@ -144,11 +138,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrganization(res.organization);
   };
 
-  const logout = () => {
-    ApiClient.clearAuth();
-    setUser(null);
-    setOrganization(null);
-    window.location.href = '/login';
+  const logout = async () => {
+    try {
+      await ApiClient.logout();
+    } catch (err) {
+      console.error('Unable to revoke the server session:', err);
+    } finally {
+      ApiClient.clearAuth();
+      setUser(null);
+      setOrganization(null);
+      window.location.href = '/login';
+    }
   };
 
   const refreshProfile = async () => {
@@ -156,7 +156,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await ApiClient.getMe();
       setUser(res.user);
       setOrganization(res.organization);
-      const token = localStorage.getItem('smart_pme_token') || '';
+      const token = ApiClient.getAccessToken() || '';
       ApiClient.setAuth(token, res.user, res.organization);
     } catch (e) {
       console.error(e);
@@ -182,7 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           exchangeRateUsdToCdf: newRate,
         },
       };
-      const token = localStorage.getItem('smart_pme_token') || '';
+      const token = ApiClient.getAccessToken() || '';
       ApiClient.setAuth(token, ApiClient.getSavedUser(), updated);
       return updated;
     });
@@ -220,4 +220,3 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 };
 
 export const useAuth = () => useContext(AuthContext);
-

@@ -4,11 +4,15 @@ import { formatCurrency, Currency, roundMoney } from '@smart-pme/shared';
 import { Package, Plus, Search, AlertTriangle, X, RefreshCw, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { isNetworkFailure, offlineSync } from '../services/offlineSync';
 
 export const ProductsPage: React.FC = () => {
   const { organization, user } = useAuth();
   const { success, error: toastError } = useToast();
-  const canManage = user?.role === 'ORG_OWNER' || user?.role === 'MANAGER' || user?.role === 'SUPER_ADMIN';
+  const canManage = user?.role === 'ORG_OWNER'
+    || user?.role === 'MANAGER'
+    || user?.role === 'INVENTORY_MANAGER'
+    || user?.role === 'SUPER_ADMIN';
 
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
@@ -19,6 +23,10 @@ export const ProductsPage: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
   const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<any | null>(null);
+  const [stockProduct, setStockProduct] = useState<any | null>(null);
+  const [stockDelta, setStockDelta] = useState('');
+  const [stockReason, setStockReason] = useState('');
+  const [stockError, setStockError] = useState<string | null>(null);
 
   // Formulaire
   const [formName, setFormName] = useState('');
@@ -27,6 +35,7 @@ export const ProductsPage: React.FC = () => {
   const [formDescription, setFormDescription] = useState('');
   const [formPurchasePrice, setFormPurchasePrice] = useState('');
   const [formSalePrice, setFormSalePrice] = useState('');
+  const [formCurrency, setFormCurrency] = useState<Currency>(Currency.CDF);
   const [formStock, setFormStock] = useState('0');
   const [formMinStock, setFormMinStock] = useState('5');
   const [formUnit, setFormUnit] = useState('Pièce');
@@ -69,6 +78,7 @@ export const ProductsPage: React.FC = () => {
     setFormDescription('');
     setFormPurchasePrice('');
     setFormSalePrice('');
+    setFormCurrency(organization?.settings?.primaryCurrency === Currency.USD ? Currency.USD : Currency.CDF);
     setFormStock('0');
     setFormMinStock('5');
     setFormUnit('Pièce');
@@ -96,13 +106,13 @@ export const ProductsPage: React.FC = () => {
         code: formCode.trim() || undefined,
         categoryId: formCategoryId || undefined,
         description: formDescription.trim() || undefined,
-        purchasePrice: parseFloat(formPurchasePrice) || 0,
-        salePrice: parseFloat(formSalePrice),
+        purchasePrice: formPurchasePrice || '0',
+        salePrice: formSalePrice,
+        currency: formCurrency,
         initialStock: formIsService ? 0 : parseInt(formStock, 10) || 0,
         minStockLevel: formIsService ? 0 : parseInt(formMinStock, 10) || 5,
         unit: formUnit.trim() || 'Pièce',
         isService: formIsService,
-        currency: 'CDF',
       });
       setShowAddModal(false);
       resetForm();
@@ -123,6 +133,7 @@ export const ProductsPage: React.FC = () => {
     setFormDescription(product.description || '');
     setFormPurchasePrice(String(product.purchasePrice || '0'));
     setFormSalePrice(String(product.salePrice || '0'));
+    setFormCurrency(product.currency === Currency.USD ? Currency.USD : Currency.CDF);
     setFormStock(String(product.currentStock || '0'));
     setFormMinStock(String(product.minStockLevel || '5'));
     setFormUnit(product.unit || 'Pièce');
@@ -145,22 +156,73 @@ export const ProductsPage: React.FC = () => {
     }
 
     setSubmitting(true);
+    const updatePayload = {
+      name: formName.trim(),
+      categoryId: formCategoryId || null,
+      description: formDescription.trim() || null,
+      purchasePrice: formPurchasePrice || '0',
+      salePrice: formSalePrice,
+      currency: formCurrency,
+      minStockLevel: parseInt(formMinStock, 10) || 5,
+      unit: formUnit.trim() || 'Pièce',
+    };
     try {
-      await ApiClient.updateProduct(editingProduct.id, {
-        name: formName.trim(),
-        categoryId: formCategoryId || null,
-        description: formDescription.trim() || null,
-        purchasePrice: parseFloat(formPurchasePrice) || 0,
-        salePrice: parseFloat(formSalePrice),
-        minStockLevel: parseInt(formMinStock, 10) || 5,
-        unit: formUnit.trim() || 'Pièce',
-      });
+      await ApiClient.updateProduct(editingProduct.id, updatePayload);
       setEditingProduct(null);
       resetForm();
       success(`Produit mis à jour avec succès.`);
       loadData();
     } catch (err: any) {
-      setFormError(err.message || 'Erreur lors de la mise à jour.');
+      if (isNetworkFailure(err)) {
+        try {
+          await offlineSync.enqueueProductUpdate(editingProduct.id, updatePayload);
+          setEditingProduct(null);
+          resetForm();
+          success('Modifications enregistrées hors-ligne. La dernière modification synchronisée sera conservée.');
+        } catch (storageError) {
+          setFormError(storageError instanceof Error
+            ? `La modification n’a pas été enregistrée. ${storageError.message}`
+            : 'La modification n’a pas été enregistrée : stockage hors-ligne indisponible.');
+        }
+      } else {
+        setFormError(err.message || 'Erreur lors de la mise à jour.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleStockMovement = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!stockProduct) return;
+    const quantity = Number(stockDelta);
+    if (!Number.isInteger(quantity) || quantity === 0) {
+      setStockError('Saisissez un nombre entier positif pour une entrée ou négatif pour une sortie.');
+      return;
+    }
+    if (!stockReason.trim()) {
+      setStockError('Le motif du mouvement est obligatoire.');
+      return;
+    }
+    if (stockProduct.currentStock + quantity < 0) {
+      setStockError(`Il reste ${stockProduct.currentStock} article(s). La sortie demandée dépasse le stock disponible.`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await offlineSync.enqueueStockMovement(stockProduct.id, { quantity, reason: stockReason.trim() });
+      setProducts((current) => current.map((product) => product.id === stockProduct.id
+        ? { ...product, currentStock: product.currentStock + quantity }
+        : product));
+      setStockProduct(null);
+      setStockDelta('');
+      setStockReason('');
+      setStockError(null);
+      success('Mouvement de stock enregistré. Il sera synchronisé dès que le réseau sera disponible.');
+    } catch (err) {
+      setStockError(err instanceof Error
+        ? `Le mouvement n’a pas été enregistré. ${err.message}`
+        : 'Le mouvement n’a pas été enregistré : stockage hors-ligne indisponible.');
     } finally {
       setSubmitting(false);
     }
@@ -349,6 +411,23 @@ export const ProductsPage: React.FC = () => {
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         {canManage ? (
                           <div style={{ display: 'inline-flex', gap: '4px' }}>
+                            {!p.isService && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-secondary"
+                                onClick={() => {
+                                  setStockProduct(p);
+                                  setStockDelta('');
+                                  setStockReason('');
+                                  setStockError(null);
+                                }}
+                                title="Enregistrer une entrée ou sortie de stock"
+                                style={{ padding: '4px 8px' }}
+                              >
+                                <RefreshCw size={13} />
+                                <span>Stock</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="btn btn-sm btn-secondary"
@@ -462,9 +541,18 @@ export const ProductsPage: React.FC = () => {
                   />
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label" htmlFor="prod-currency">Devise de référence des prix</label>
+                  <select id="prod-currency" className="input-field" value={formCurrency}
+                    onChange={(e) => setFormCurrency(e.target.value === Currency.USD ? Currency.USD : Currency.CDF)}>
+                    <option value="CDF">CDF — Franc Congolais</option>
+                    <option value="USD">USD — Dollar américain</option>
+                  </select>
+                </div>
+
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label" htmlFor="prod-buy">Prix d'achat (CDF)</label>
+                    <label className="form-label" htmlFor="prod-buy">Prix d'achat ({formCurrency})</label>
                     <input
                       id="prod-buy"
                       type="number"
@@ -478,7 +566,7 @@ export const ProductsPage: React.FC = () => {
                   </div>
                   <div className="form-group">
                     <label className="form-label" htmlFor="prod-sell">
-                      Prix de vente (CDF) <span className="required">*</span>
+                      Prix de vente ({formCurrency}) <span className="required">*</span>
                     </label>
                     <input
                       id="prod-sell"
@@ -508,7 +596,7 @@ export const ProductsPage: React.FC = () => {
                   }}>
                     <span style={{ color: '#4B5563' }}>Marge estimée :</span>
                     <strong style={{ color: marginAmt > 0 ? '#16A34A' : '#DC2626' }}>
-                      {formatCurrency(marginAmt, Currency.CDF)} ({marginPct}%)
+                      {formatCurrency(marginAmt, formCurrency)} ({marginPct}%)
                     </strong>
                   </div>
                 )}
@@ -660,9 +748,18 @@ export const ProductsPage: React.FC = () => {
                   </div>
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label" htmlFor="edit-currency">Devise de référence des prix</label>
+                  <select id="edit-currency" className="input-field" value={formCurrency}
+                    onChange={(e) => setFormCurrency(e.target.value === Currency.USD ? Currency.USD : Currency.CDF)}>
+                    <option value="CDF">CDF — Franc Congolais</option>
+                    <option value="USD">USD — Dollar américain</option>
+                  </select>
+                </div>
+
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label" htmlFor="edit-buy">Prix d'achat (CDF)</label>
+                    <label className="form-label" htmlFor="edit-buy">Prix d'achat ({formCurrency})</label>
                     <input
                       id="edit-buy"
                       type="number"
@@ -675,7 +772,7 @@ export const ProductsPage: React.FC = () => {
 
                   <div className="form-group">
                     <label className="form-label" htmlFor="edit-sell">
-                      Prix de vente (CDF) <span className="required">*</span>
+                      Prix de vente ({formCurrency}) <span className="required">*</span>
                     </label>
                     <input
                       id="edit-sell"
@@ -716,6 +813,62 @@ export const ProductsPage: React.FC = () => {
                   className="btn btn-primary"
                 >
                   {submitting ? 'Enregistrement...' : 'Enregistrer les modifications'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {stockProduct && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '440px' }}>
+            <div className="modal-header">
+              <span className="modal-title">Mouvement de stock : {stockProduct.name}</span>
+              <button type="button" className="btn-close" onClick={() => setStockProduct(null)} aria-label="Fermer">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleStockMovement}>
+              <div className="modal-body">
+                <p>Stock affiché : <strong>{stockProduct.currentStock} {stockProduct.unit}</strong></p>
+                {stockError && (
+                  <div className="alert alert-danger" style={{ marginBottom: '16px' }}>
+                    <AlertTriangle size={14} className="alert-icon" />
+                    <span>{stockError}</span>
+                  </div>
+                )}
+                <div className="form-group">
+                  <label className="form-label" htmlFor="stock-delta">Quantité (+ entrée, − sortie)</label>
+                  <input
+                    id="stock-delta"
+                    type="number"
+                    step="1"
+                    required
+                    className="input-field"
+                    value={stockDelta}
+                    onChange={(event) => setStockDelta(event.target.value)}
+                    placeholder="Ex. 10 ou -2"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="stock-reason">Motif</label>
+                  <input
+                    id="stock-reason"
+                    type="text"
+                    required
+                    maxLength={240}
+                    className="input-field"
+                    value={stockReason}
+                    onChange={(event) => setStockReason(event.target.value)}
+                    placeholder="Réception, inventaire, casse…"
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setStockProduct(null)}>Annuler</button>
+                <button type="submit" className="btn btn-primary" disabled={submitting}>
+                  {submitting ? 'Enregistrement...' : 'Enregistrer le mouvement'}
                 </button>
               </div>
             </form>

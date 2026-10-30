@@ -23,7 +23,7 @@ export class SuppliersController {
   }
 
   @Get(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.INVENTORY_MANAGER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.INVENTORY_MANAGER, UserRole.PURCHASER)
   @ApiOperation({ summary: 'Obtenir la fiche fournisseur et historique' })
   async findById(@CurrentUser('organizationId') orgId: string, @Param('id') id: string) {
     return this.suppliersService.findById(orgId, id);
@@ -48,7 +48,7 @@ export class SuppliersController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.ORG_OWNER, UserRole.MANAGER, UserRole.ACCOUNTANT, UserRole.INVENTORY_MANAGER, UserRole.PURCHASER)
   @ApiOperation({ summary: 'Mettre à jour la fiche fournisseur' })
   async update(
     @CurrentUser('organizationId') orgId: string,

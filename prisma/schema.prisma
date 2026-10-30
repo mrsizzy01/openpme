@@ -81,6 +81,16 @@ enum CashSessionStatus {
   CLOSED
 }
 
+enum CashMovementType {
+  IN
+  OUT
+}
+
+enum DesktopTerminalStatus {
+  ACTIVE
+  LOCKED
+}
+
 enum AnomalySeverity {
   LOW
   MEDIUM
@@ -121,22 +131,22 @@ enum PurchaseStatus {
 }
 
 model Organization {
-  id           String   @id @default(uuid())
-  name         String
-  legalName    String?
-  taxId        String?  // NIF
-  rccm         String?  // RCCM
-  idNat        String?  // ID NAT
-  email        String?
-  phone        String?
-  address      String?
-  city         String?
-  country      String   @default("RDC")
-  logoUrl      String?
-  sector       String?  @default("Commerce Général")
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        String   @id @default(uuid())
+  name      String
+  legalName String?
+  taxId     String? // NIF
+  rccm      String? // RCCM
+  idNat     String? // ID NAT
+  email     String?
+  phone     String?
+  address   String?
+  city      String?
+  country   String   @default("RDC")
+  logoUrl   String?
+  sector    String?  @default("Commerce Général")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   settings          OrganizationSettings?
   users             User[]
@@ -153,39 +163,41 @@ model Organization {
   expenses          Expense[]
   cashRegisters     CashRegister[]
   cashSessions      CashSession[]
+  cashMovements     CashMovement[]
   financialAccounts FinancialAccount[]
   anomalyAlerts     AnomalyAlert[]
   auditLogs         AuditLog[]
   exchangeRates     ExchangeRate[]
+  desktopTerminals  DesktopTerminal[]
 
   @@map("organizations")
 }
 
 model OrganizationSettings {
-  id                           String       @id @default(uuid())
-  organizationId               String       @unique
-  organization                 Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  primaryCurrency              Currency     @default(CDF)
-  secondaryCurrency            Currency     @default(USD)
-  exchangeRateUsdToCdf         Decimal      @default(2850.00) @db.Decimal(12, 4)
-  taxRatePercent               Decimal      @default(16.00) @db.Decimal(5, 2)
-  enableTax                    Boolean      @default(true)
-  invoicePrefix                String       @default("FAC-")
-  quotePrefix                  String       @default("DEV-")
-  receiptPrefix                String       @default("REC-")
-  invoiceNextNumber            Int          @default(1001)
-  quoteNextNumber              Int          @default(1001)
-  paymentTermsDays             Int          @default(30)
-  invoiceFooterNote            String?      @default("Merci de votre confiance.")
-  bankDetails                  String?
-  mobileMoneyDetails           String?
-  alertMaxDiscountPercent      Decimal      @default(15.00) @db.Decimal(5, 2)
-  alertLargeExpenseThreshold   Decimal      @default(1000000.00) @db.Decimal(15, 2)
-  alertCashDiscrepancyThreshold Decimal     @default(10000.00) @db.Decimal(15, 2)
-  primaryColor                 String       @default("#1E40AF")
-  themeMode                    String       @default("light")
-  createdAt                    DateTime     @default(now())
-  updatedAt                    DateTime     @updatedAt
+  id                            String       @id @default(uuid())
+  organizationId                String       @unique
+  organization                  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  primaryCurrency               Currency     @default(CDF)
+  secondaryCurrency             Currency     @default(USD)
+  exchangeRateUsdToCdf          Decimal      @default(2850.00) @db.Decimal(12, 4)
+  taxRatePercent                Decimal      @default(16.00) @db.Decimal(5, 2)
+  enableTax                     Boolean      @default(true)
+  invoicePrefix                 String       @default("FAC-")
+  quotePrefix                   String       @default("DEV-")
+  receiptPrefix                 String       @default("REC-")
+  invoiceNextNumber             Int          @default(1001)
+  quoteNextNumber               Int          @default(1001)
+  paymentTermsDays              Int          @default(30)
+  invoiceFooterNote             String?      @default("Merci de votre confiance.")
+  bankDetails                   String?
+  mobileMoneyDetails            String?
+  alertMaxDiscountPercent       Decimal      @default(15.00) @db.Decimal(5, 2)
+  alertLargeExpenseThreshold    Decimal      @default(1000000.00) @db.Decimal(15, 2)
+  alertCashDiscrepancyThreshold Decimal      @default(10000.00) @db.Decimal(15, 2)
+  primaryColor                  String       @default("#1E40AF")
+  themeMode                     String       @default("light")
+  createdAt                     DateTime     @default(now())
+  updatedAt                     DateTime     @updatedAt
 
   @@map("organization_settings")
 }
@@ -205,14 +217,15 @@ model User {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  sales         Sale[]
-  purchases     Purchase[]
-  stockMovements StockMovement[]
-  payments      Payment[]
-  expenses      Expense[]
-  cashSessions  CashSession[]
-  auditLogs     AuditLog[]
-  sessions      Session[]
+  sales           Sale[]
+  purchases       Purchase[]
+  stockMovements  StockMovement[]
+  payments        Payment[]
+  expenses        Expense[]
+  cashSessions    CashSession[]
+  auditLogs       AuditLog[]
+  sessions        Session[]
+  lockedTerminals DesktopTerminal[] @relation("DesktopTerminalLocker")
 
   @@index([organizationId])
   @@index([email])
@@ -220,19 +233,50 @@ model User {
 }
 
 model Session {
-  id           String    @id @default(uuid())
+  id           String   @id @default(uuid())
   userId       String
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token        String    @unique
-  refreshToken String?   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  terminalId   String?
+  token        String   @unique
+  refreshToken String?  @unique
   userAgent    String?
   ipAddress    String?
   expiresAt    DateTime
-  revoked      Boolean   @default(false)
-  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime @default(now())
+  revoked      Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, revoked, expiresAt])
+  @@index([lastSeenAt])
   @@map("sessions")
+}
+
+model DesktopTerminal {
+  id                  String                @id @default(uuid())
+  terminalId          String
+  organizationId      String
+  organization        Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  displayName         String
+  status              DesktopTerminalStatus @default(ACTIVE)
+  tokenHash           String?               @unique
+  tokenRevokedAt      DateTime?
+  lockReason          String?
+  lockedAt            DateTime?
+  lockedById          String?
+  lockedBy            User?                 @relation("DesktopTerminalLocker", fields: [lockedById], references: [id], onDelete: SetNull)
+  lastHeartbeatAt     DateTime?
+  lastIpAddress       String?
+  stateVersion        Int                   @default(1)
+  acknowledgedVersion Int                   @default(0)
+  lastAcknowledgedAt  DateTime?
+  offlineGraceHours   Int                   @default(24)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  @@unique([organizationId, terminalId])
+  @@index([organizationId, status])
+  @@index([organizationId, lastHeartbeatAt])
+  @@map("desktop_terminals")
 }
 
 model Category {
@@ -365,28 +409,32 @@ model Supplier {
 }
 
 model Sale {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  saleNumber     String
-  customerId     String?
-  customer       Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  userId         String
-  user           User         @relation(fields: [userId], references: [id])
-  subtotal       Decimal      @db.Decimal(15, 2)
-  discountAmount Decimal      @default(0.00) @db.Decimal(15, 2)
-  taxAmount      Decimal      @default(0.00) @db.Decimal(15, 2)
-  total          Decimal      @db.Decimal(15, 2)
-  currency       Currency     @default(CDF)
-  status         SaleStatus   @default(COMPLETED)
-  notes          String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id                   String       @id @default(uuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  saleNumber           String
+  idempotencyKey       String?
+  customerId           String?
+  customer             Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  userId               String
+  user                 User         @relation(fields: [userId], references: [id])
+  subtotal             Decimal      @db.Decimal(15, 2)
+  discountAmount       Decimal      @default(0.00) @db.Decimal(15, 2)
+  taxAmount            Decimal      @default(0.00) @db.Decimal(15, 2)
+  total                Decimal      @db.Decimal(15, 2)
+  currency             Currency     @default(CDF)
+  exchangeRateUsdToCdf Decimal      @default(2850.00) @db.Decimal(12, 4)
+  changeAmountCdf      Decimal      @default(0.00) @db.Decimal(15, 2)
+  status               SaleStatus   @default(COMPLETED)
+  notes                String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   items   SaleItem[]
   invoice Invoice?
 
   @@unique([organizationId, saleNumber])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@index([customerId])
   @@index([userId])
@@ -394,16 +442,17 @@ model Sale {
 }
 
 model SaleItem {
-  id             String   @id @default(uuid())
-  saleId         String
-  sale           Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  productId      String
-  product        Product  @relation(fields: [productId], references: [id])
-  quantity       Int
-  unitPrice      Decimal  @db.Decimal(15, 2)
+  id              String  @id @default(uuid())
+  saleId          String
+  sale            Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product @relation(fields: [productId], references: [id])
+  quantity        Int
+  unitPrice       Decimal @db.Decimal(15, 2)
+  unitCost        Decimal? @db.Decimal(15, 2)
   discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
-  taxRatePercent Decimal  @default(0.00) @db.Decimal(5, 2)
-  total          Decimal  @db.Decimal(15, 2)
+  taxRatePercent  Decimal @default(0.00) @db.Decimal(5, 2)
+  total           Decimal @db.Decimal(15, 2)
 
   @@index([saleId])
   @@index([productId])
@@ -455,6 +504,7 @@ model StockMovement {
   id             String            @id @default(uuid())
   organizationId String
   organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  idempotencyKey String?
   warehouseId    String
   warehouse      Warehouse         @relation(fields: [warehouseId], references: [id])
   productId      String
@@ -470,6 +520,7 @@ model StockMovement {
   createdAt      DateTime          @default(now())
 
   @@index([organizationId])
+  @@unique([organizationId, idempotencyKey])
   @@index([productId])
   @@index([warehouseId])
   @@map("stock_movements")
@@ -511,44 +562,48 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id             String   @id @default(uuid())
-  invoiceId      String
-  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  productId      String?
-  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  description    String
-  quantity       Int
-  unitPrice      Decimal  @db.Decimal(15, 2)
-  discountPercent Decimal @default(0.00) @db.Decimal(5, 2)
-  taxRatePercent Decimal  @default(0.00) @db.Decimal(5, 2)
-  total          Decimal  @db.Decimal(15, 2)
+  id              String   @id @default(uuid())
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId       String?
+  product         Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  description     String
+  quantity        Int
+  unitPrice       Decimal  @db.Decimal(15, 2)
+  discountPercent Decimal  @default(0.00) @db.Decimal(5, 2)
+  taxRatePercent  Decimal  @default(0.00) @db.Decimal(5, 2)
+  total           Decimal  @db.Decimal(15, 2)
 
   @@index([invoiceId])
   @@map("invoice_items")
 }
 
 model Payment {
-  id             String        @id @default(uuid())
-  organizationId String
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  paymentNumber  String
-  invoiceId      String?
-  invoice        Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  customerId     String?
-  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  cashSessionId  String?
-  cashSession    CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
-  userId         String
-  user           User          @relation(fields: [userId], references: [id])
-  amount         Decimal       @db.Decimal(15, 2)
-  currency       Currency      @default(CDF)
-  method         PaymentMethod @default(CASH)
-  reference      String?
-  status         PaymentStatus @default(COMPLETED)
-  notes          String?
-  createdAt      DateTime      @default(now())
+  id                   String        @id @default(uuid())
+  organizationId       String
+  organization         Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  paymentNumber        String
+  idempotencyKey       String?
+  invoiceId            String?
+  invoice              Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  customerId           String?
+  customer             Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  cashSessionId        String?
+  cashSession          CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id])
+  amount               Decimal       @db.Decimal(15, 2)
+  currency             Currency      @default(CDF)
+  method               PaymentMethod @default(CASH)
+  reference            String?
+  status               PaymentStatus @default(COMPLETED)
+  exchangeRateUsdToCdf Decimal       @default(2850.00) @db.Decimal(12, 4)
+  appliedAmount        Decimal?      @db.Decimal(15, 2)
+  notes                String?
+  createdAt            DateTime      @default(now())
 
   @@unique([organizationId, paymentNumber])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@index([invoiceId])
   @@index([customerId])
@@ -589,12 +644,30 @@ model CashSession {
   closedAt           DateTime?
   notes              String?
 
-  payments Payment[]
+  payments  Payment[]
+  movements CashMovement[]
 
   @@index([organizationId])
   @@index([cashRegisterId])
   @@index([userId])
   @@map("cash_sessions")
+}
+
+model CashMovement {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cashSessionId  String
+  cashSession    CashSession      @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+  type           CashMovementType
+  amount         Decimal          @db.Decimal(15, 2)
+  reference      String?
+  description    String
+  createdAt      DateTime         @default(now())
+
+  @@index([organizationId])
+  @@index([cashSessionId, createdAt])
+  @@map("cash_movements")
 }
 
 model FinancialAccount {
@@ -618,25 +691,28 @@ model FinancialAccount {
 }
 
 model Expense {
-  id                 String            @id @default(uuid())
-  organizationId     String
-  organization       Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  expenseNumber      String
-  category           String
-  amount             Decimal           @db.Decimal(15, 2)
-  currency           Currency          @default(CDF)
-  beneficiary        String
-  method             PaymentMethod     @default(CASH)
-  reference          String?
-  notes              String?
-  date               DateTime          @default(now())
-  userId             String
-  user               User              @relation(fields: [userId], references: [id])
-  financialAccountId String?
-  financialAccount   FinancialAccount? @relation(fields: [financialAccountId], references: [id], onDelete: SetNull)
-  createdAt          DateTime          @default(now())
+  id                   String            @id @default(uuid())
+  organizationId       String
+  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expenseNumber        String
+  idempotencyKey       String?
+  category             String
+  amount               Decimal           @db.Decimal(15, 2)
+  currency             Currency          @default(CDF)
+  exchangeRateUsdToCdf Decimal           @default(2850.00) @db.Decimal(12, 4)
+  beneficiary          String
+  method               PaymentMethod     @default(CASH)
+  reference            String?
+  notes                String?
+  date                 DateTime          @default(now())
+  userId               String
+  user                 User              @relation(fields: [userId], references: [id])
+  financialAccountId   String?
+  financialAccount     FinancialAccount? @relation(fields: [financialAccountId], references: [id], onDelete: SetNull)
+  createdAt            DateTime          @default(now())
 
   @@unique([organizationId, expenseNumber])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
   @@index([userId])
   @@map("expenses")
@@ -695,9 +771,10 @@ model ExchangeRate {
   toCurrency     Currency
   rate           Decimal      @db.Decimal(12, 4)
   source         String       @default("Banque Centrale du Congo / Marché")
-  effectiveDate  DateTime     @default(now())
+  effectiveDate  DateTime     @default(now()) @db.Date
   createdAt      DateTime     @default(now())
 
+  @@unique([organizationId, fromCurrency, toCurrency, effectiveDate])
   @@index([organizationId])
   @@map("exchange_rates")
 }

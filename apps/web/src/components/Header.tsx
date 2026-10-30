@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Wallet, DollarSign, Plus, Wifi, WifiOff, RefreshCw, Edit3, X, Check } from 'lucide-react';
+import { Wallet, DollarSign, Plus, Wifi, WifiOff, RefreshCw, Edit3, X, Check, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { offlineSync } from '../services/offlineSync';
@@ -20,8 +20,13 @@ export const Header: React.FC<HeaderProps> = ({
   const { organization, user, updateExchangeRate } = useAuth();
   const navigate = useNavigate();
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [pendingSyncCount, setPendingSyncCount] = useState(offlineSync.getPendingCount());
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [pendingSyncError, setPendingSyncError] = useState('');
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [reviewOperations, setReviewOperations] = useState<Awaited<ReturnType<typeof offlineSync.getReviewOperations>>>([]);
+  const [conflictLog, setConflictLog] = useState<Awaited<ReturnType<typeof offlineSync.getConflictLog>>>([]);
+  const [showOfflineReview, setShowOfflineReview] = useState(false);
   const [showRateModal, setShowRateModal] = useState(false);
   const [newRateInput, setNewRateInput] = useState('');
   const [isSubmittingRate, setIsSubmittingRate] = useState(false);
@@ -29,17 +34,31 @@ export const Header: React.FC<HeaderProps> = ({
   const canManageRate = user?.role === 'ORG_OWNER' || user?.role === 'MANAGER' || user?.role === 'SUPER_ADMIN';
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    let active = true;
+    const refreshOfflineState = async () => {
+      try {
+        const snapshot = await offlineSync.getSnapshot();
+        if (!active) return;
+        setIsOnline(snapshot.isOnline);
+        setPendingSyncCount(snapshot.pendingCount);
+        setPendingReviewCount(snapshot.reviewCount);
+        setIsSyncing(snapshot.status === 'syncing');
+        setPendingSyncError(await offlineSync.getPendingSyncError());
+      } catch (error) {
+        if (active) setPendingSyncError(error instanceof Error ? error.message : 'État hors-ligne indisponible.');
+      }
+    };
+    const handleOnline = () => void refreshOfflineState();
+    const handleOffline = () => void refreshOfflineState();
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    const unsubscribe = offlineSync.subscribe(() => {
-      setPendingSyncCount(offlineSync.getPendingCount());
-    });
+    const unsubscribe = offlineSync.subscribe(() => void refreshOfflineState());
+    void refreshOfflineState();
 
     return () => {
+      active = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       unsubscribe();
@@ -52,9 +71,52 @@ export const Header: React.FC<HeaderProps> = ({
       await offlineSync.syncPendingSales();
     } finally {
       setIsSyncing(false);
-      setPendingSyncCount(offlineSync.getPendingCount());
+      const snapshot = await offlineSync.getSnapshot();
+      setPendingSyncCount(snapshot.pendingCount);
+      setPendingReviewCount(snapshot.reviewCount);
+      setPendingSyncError(await offlineSync.getPendingSyncError());
     }
   };
+
+  const openOfflineReview = async () => {
+    const [operations, conflicts] = await Promise.all([
+      offlineSync.getReviewOperations(),
+      offlineSync.getConflictLog(),
+    ]);
+    setReviewOperations(operations);
+    setConflictLog(conflicts);
+    setShowOfflineReview(true);
+  };
+
+  const retryOfflineOperation = async (id: string) => {
+    await offlineSync.retryOperation(id);
+    setReviewOperations(await offlineSync.getReviewOperations());
+    setConflictLog(await offlineSync.getConflictLog());
+  };
+
+  const archiveOfflineOperation = async (id: string) => {
+    await offlineSync.archiveOperation(id);
+    setReviewOperations(await offlineSync.getReviewOperations());
+    setConflictLog(await offlineSync.getConflictLog());
+  };
+
+  const offlineStatusColor = pendingReviewCount > 0 || pendingSyncError
+    ? { background: '#FEF2F2', border: '#FECACA', color: '#991B1B' }
+    : !isOnline
+      ? { background: '#FEF3C7', border: '#FCD34D', color: '#92400E' }
+      : isSyncing
+        ? { background: '#EFF6FF', border: '#BFDBFE', color: '#1D4ED8' }
+        : { background: '#F0FDF4', border: '#DCFCE7', color: '#166534' };
+
+  const offlineStatusLabel = pendingReviewCount > 0
+    ? `Erreur, ${pendingReviewCount} opérations à vérifier`
+    : pendingSyncError
+      ? 'Erreur, file hors-ligne à vérifier'
+      : isSyncing
+        ? 'Synchronisation en cours'
+        : !isOnline && pendingSyncCount > 0
+          ? `Hors ligne, ${pendingSyncCount} opérations en attente`
+          : 'Synchronisé';
 
   const exchangeRate = Number(organization?.settings?.exchangeRateUsdToCdf) || 2850;
 
@@ -88,31 +150,34 @@ export const Header: React.FC<HeaderProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {/* Statut Réseau & Synchro Offline */}
           <div
+            title={pendingSyncError || 'État de synchronisation des opérations commerciales'}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
               padding: '4px 10px',
-              background: isOnline ? (pendingSyncCount > 0 ? '#FEF3C7' : '#F0FDF4') : '#FEF2F2',
-              border: `1px solid ${isOnline ? (pendingSyncCount > 0 ? '#FCD34D' : '#DCFCE7') : '#FECACA'}`,
+              background: offlineStatusColor.background,
+              border: `1px solid ${offlineStatusColor.border}`,
               borderRadius: '6px',
               fontSize: '0.75rem',
-              color: isOnline ? (pendingSyncCount > 0 ? '#92400E' : '#166534') : '#991B1B',
+              color: offlineStatusColor.color,
               fontWeight: 500,
             }}
           >
-            {isOnline ? (
-              <Wifi size={13} color={pendingSyncCount > 0 ? '#D97706' : '#16A34A'} />
-            ) : (
-              <WifiOff size={13} color="#DC2626" />
-            )}
-            <span>
-              {!isOnline
-                ? `Hors-ligne (${pendingSyncCount} en attente)`
-                : pendingSyncCount > 0
-                ? `${pendingSyncCount} à synchroniser`
-                : 'Connecté (Synchro auto)'}
-            </span>
+            {pendingReviewCount > 0
+              ? <AlertTriangle size={13} />
+              : isOnline
+                ? <Wifi size={13} />
+                : <WifiOff size={13} />}
+            {pendingReviewCount > 0 ? (
+              <button
+                type="button"
+                onClick={openOfflineReview}
+                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', font: 'inherit', padding: 0 }}
+              >
+                {offlineStatusLabel}
+              </button>
+            ) : <span>{offlineStatusLabel}</span>}
             {pendingSyncCount > 0 && isOnline && (
               <button
                 type="button"
@@ -211,6 +276,53 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </header>
 
+      {showOfflineReview && (
+        <div className="modal-overlay" onClick={() => setShowOfflineReview(false)}>
+          <div className="modal-content" style={{ maxWidth: '600px' }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h2 style={{ margin: 0 }}>Opérations à vérifier</h2>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowOfflineReview(false)} aria-label="Fermer">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: 'grid', gap: '12px', maxHeight: '60vh', overflowY: 'auto' }}>
+              {reviewOperations.length === 0 ? (
+                <p>Aucune opération à vérifier.</p>
+              ) : reviewOperations.map((operation) => (
+                <section key={operation.id} style={{ border: '1px solid #FECACA', borderRadius: '8px', padding: '12px' }}>
+                  <strong>{operation.type}</strong>
+                  <p style={{ margin: '6px 0', color: '#991B1B' }}>{operation.lastError}</p>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={() => void retryOfflineOperation(operation.id)}>
+                      Réessayer
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void archiveOfflineOperation(operation.id)}>
+                      Archiver avec journal
+                    </button>
+                  </div>
+                </section>
+              ))}
+              {conflictLog.length > 0 && (
+                <section>
+                  <h3>Journal des conflits</h3>
+                  {conflictLog.map((conflict) => (
+                    <div key={conflict.id} style={{ borderTop: '1px solid #E5E7EB', padding: '8px 0' }}>
+                      <strong>{conflict.operationType}</strong>
+                      <span style={{ marginLeft: '8px', color: '#6B7280' }}>
+                        {new Date(conflict.occurredAt).toLocaleString('fr-FR')} · {
+                          conflict.status === 'open' ? 'À vérifier' : conflict.status === 'resolved' ? 'Résolu' : 'Archivé'
+                        }
+                      </span>
+                      <p style={{ margin: '4px 0' }}>{conflict.message}</p>
+                    </div>
+                  ))}
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Ajustement Rapide du Taux de Change */}
       {showRateModal && (
         <div className="modal-overlay" onClick={() => setShowRateModal(false)}>
@@ -308,4 +420,3 @@ export const Header: React.FC<HeaderProps> = ({
     </>
   );
 };
-

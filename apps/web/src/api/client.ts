@@ -1,17 +1,60 @@
-const API_BASE_URL = 'http://localhost:3001/api/v1';
+const getApiBaseUrl = () => (
+  import.meta.env.VITE_API_BASE_URL
+  || (import.meta.env.DEV
+    ? '/api/v1'
+    : `${window.location.protocol}//${window.location.hostname}:3001/api/v1`)
+).replace(/\/+$/, '');
+
+export class ApiClientError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = 'ApiClientError';
+  }
+}
 
 export class ApiClient {
+  private static refreshPromise: Promise<any> | null = null;
+  private static accessToken: string | null = null;
+
+  private static async fetchApi(url: string, options: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('Serveur API inaccessible. Vérifiez que l’API est démarrée et que la base de données est accessible.');
+      }
+      throw error;
+    }
+  }
+
+  private static async parseResponse(response: Response): Promise<any> {
+    const body = await response.text();
+    if (!body.trim()) return null;
+
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new ApiClientError(`Réponse invalide du serveur (HTTP ${response.status}).`, response.status);
+    }
+  }
+
   private static getToken(): string | null {
-    return localStorage.getItem('smart_pme_token');
+    return this.accessToken;
+  }
+
+  static getAccessToken(): string | null {
+    return this.accessToken;
   }
 
   static setAuth(token: string, user: any, org: any) {
-    localStorage.setItem('smart_pme_token', token);
+    this.accessToken = token || null;
+    localStorage.removeItem('smart_pme_token');
     localStorage.setItem('smart_pme_user', JSON.stringify(user));
     localStorage.setItem('smart_pme_org', JSON.stringify(org));
   }
 
   static clearAuth() {
+    this.accessToken = null;
     localStorage.removeItem('smart_pme_token');
     localStorage.removeItem('smart_pme_user');
     localStorage.removeItem('smart_pme_org');
@@ -35,8 +78,49 @@ export class ApiClient {
     }
   }
 
-  private static async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const token = this.getToken();
+  private static async refreshSession() {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.fetchApi(`${getApiBaseUrl()}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+        .then(async (response) => {
+          const json = await this.parseResponse(response);
+          if (!response.ok) {
+            throw new Error(json?.message || 'Session expirée');
+          }
+          if (!json?.accessToken || !json?.user || !json?.organization) {
+            throw new Error('La réponse de renouvellement de session est incomplète.');
+          }
+          this.setAuth(json.accessToken, json.user, json.organization);
+          return json;
+        })
+        .finally(() => {
+          this.refreshPromise = null;
+        });
+    }
+
+    return this.refreshPromise;
+  }
+
+  static async restoreSession() {
+    localStorage.removeItem('smart_pme_token');
+    if (this.getToken()) {
+      const profile = await this.request<any>('/auth/me');
+      const token = this.getToken();
+      if (token) this.setAuth(token, profile.user, profile.organization);
+      return profile;
+    }
+
+    const refreshed = await this.refreshSession();
+    return { user: refreshed.user, organization: refreshed.organization };
+  }
+
+  static async logout() {
+    await this.request('/auth/logout', { method: 'POST' });
+  }
+
+  private static async send<T>(endpoint: string, options: RequestInit, token: string | null) {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
@@ -46,23 +130,41 @@ export class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    return this.fetchApi(`${getApiBaseUrl()}${endpoint}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
+  }
 
-    if (response.status === 401) {
-      this.clearAuth();
-      if (!window.location.pathname.includes('/login')) {
-        window.location.href = '/login';
+  private static async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    let response = await this.send(endpoint, options, this.getToken());
+    const usesAuthEndpoint = ['/auth/login', '/auth/refresh', '/auth/logout'].includes(endpoint);
+    if (response.status === 401 && !usesAuthEndpoint) {
+      try {
+        await this.refreshSession();
+        response = await this.send(endpoint, options, this.getToken());
+      } catch {
+        this.clearAuth();
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        throw new Error('Session expirée. Veuillez vous reconnecter.');
       }
-      throw new Error('Session expirée');
+
+      if (response.status === 401) {
+        this.clearAuth();
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        throw new Error('Session expirée. Veuillez vous reconnecter.');
+      }
     }
 
-    const json = await response.json();
+    const json = await this.parseResponse(response);
 
     if (!response.ok) {
-      throw new Error(json.message || 'Une erreur est survenue');
+      throw new ApiClientError(json?.message || `La requête a échoué (HTTP ${response.status}).`, response.status);
     }
 
     return json;
@@ -88,8 +190,43 @@ export class ApiClient {
   }
 
   // Dashboard
-  static getDashboardMetrics() {
-    return this.request<any>('/dashboard/metrics');
+  static getDashboardMetrics(currency?: string) {
+    const query = currency ? `?currency=${encodeURIComponent(currency)}` : '';
+    return this.request<any>(`/dashboard/metrics${query}`);
+  }
+
+  static async downloadBankDossier(months: 6 | 12): Promise<Blob> {
+    const endpoint = `/reports/bank-dossier?months=${months}`;
+    const options: RequestInit = { method: 'GET', headers: { Accept: 'application/pdf' } };
+    let response = await this.send(endpoint, options, this.getToken());
+
+    if (response.status === 401) {
+      try {
+        await this.refreshSession();
+        response = await this.send(endpoint, options, this.getToken());
+      } catch {
+        this.clearAuth();
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        throw new Error('Session expirée. Veuillez vous reconnecter.');
+      }
+
+      if (response.status === 401) {
+        this.clearAuth();
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        throw new Error('Session expirée. Veuillez vous reconnecter.');
+      }
+    }
+
+    if (!response.ok) {
+      const error = await this.parseResponse(response);
+      throw new Error(error?.message || `Le téléchargement a échoué (HTTP ${response.status}).`);
+    }
+
+    return response.blob();
   }
 
   // Products
@@ -118,6 +255,13 @@ export class ApiClient {
   static updateProduct(id: string, data: any) {
     return this.request<any>(`/products/${id}`, {
       method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  static createStockMovement(id: string, data: any) {
+    return this.request<any>(`/products/${id}/stock-movements`, {
+      method: 'POST',
       body: JSON.stringify(data),
     });
   }
@@ -222,8 +366,9 @@ export class ApiClient {
     return this.request<any[]>('/finances/cash-registers');
   }
 
-  static getCurrentCashSession() {
-    return this.request<any>('/finances/cash-sessions/current');
+  static getCurrentCashSession(currency?: string) {
+    const query = currency ? `?currency=${encodeURIComponent(currency)}` : '';
+    return this.request<any>(`/finances/cash-sessions/current${query}`);
   }
 
   static openCashSession(data: any) {
@@ -233,7 +378,7 @@ export class ApiClient {
     });
   }
 
-  static closeCashSession(sessionId: string, closingCountedBalance: number, notes?: string) {
+  static closeCashSession(sessionId: string, closingCountedBalance: number | string, notes?: string) {
     return this.request<any>(`/finances/cash-sessions/${sessionId}/close`, {
       method: 'PATCH',
       body: JSON.stringify({ closingCountedBalance, notes }),
@@ -279,6 +424,10 @@ export class ApiClient {
     });
   }
 
+  static getExchangeRates(limit = 100) {
+    return this.request<any[]>(`/organizations/exchange-rates?limit=${limit}`);
+  }
+
   static updateOrgProfile(profile: any) {
     return this.request<any>('/organizations/profile', {
       method: 'PATCH',
@@ -303,6 +452,13 @@ export class ApiClient {
       method: 'PATCH',
       body: JSON.stringify(data),
     });
+  }
+
+  static resetUserPassword(id: string) {
+    return this.request<{ id: string; email: string; temporaryPassword: string }>(
+      `/users/${id}/reset-password`,
+      { method: 'POST' },
+    );
   }
 
   static deleteUser(id: string) {
@@ -349,9 +505,17 @@ export class ApiClient {
     });
   }
 
-  static unlockTerminal(id: string) {
+  static unlockTerminal(id: string, reason: string) {
     return this.request<any>(`/remote-control/terminals/${id}/unlock`, {
       method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  static revokeTerminal(id: string, reason: string) {
+    return this.request<any>(`/remote-control/terminals/${id}/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   }
 
@@ -359,18 +523,6 @@ export class ApiClient {
     return this.request<any>(`/remote-control/terminals/${id}/kill`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
-    });
-  }
-
-  static sendHeartbeat(data: {
-    terminalId: string;
-    organizationId: string;
-    userId?: string;
-    clientType?: 'DESKTOP_PYQT' | 'WEB_POS' | 'BROWSER';
-  }) {
-    return this.request<any>('/remote-control/heartbeat', {
-      method: 'POST',
-      body: JSON.stringify(data),
     });
   }
 
@@ -433,6 +585,3 @@ export class ApiClient {
     });
   }
 }
-
-
-

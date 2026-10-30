@@ -1,24 +1,22 @@
 services:
-  # Base de données PostgreSQL
   postgres:
     image: postgres:17-alpine
     container_name: openpme_postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: smart_pme_finance
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_pme_finance}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # API Centrale NestJS
   api:
     build:
       context: .
@@ -26,16 +24,17 @@ services:
     container_name: openpme_api
     restart: always
     environment:
-      DATABASE_URL: "postgresql://postgres:postgrespassword@postgres:5432/smart_pme_finance?schema=public"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-smart_pme_finance}?schema=public"
       PORT: 3001
-      JWT_SECRET: "smart_pme_finance_super_secure_jwt_secret_key_prod_2026_xyz"
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
     ports:
       - "3001:3001"
     depends_on:
       postgres:
         condition: service_healthy
 
-  # Frontend Web React / Vite
   web:
     build:
       context: .

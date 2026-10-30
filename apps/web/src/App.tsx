@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { ApiClient } from './api/client';
+import { getFirstAllowedPath, hasPathAccess } from './role-permissions';
 
 // Pages
 import { LoginPage } from './pages/LoginPage';
@@ -25,6 +26,7 @@ const ProtectedLayout: React.FC<{ children: React.ReactNode; title: string; subt
   subtitle,
 }) => {
   const { isAuthenticated, isLoading, user } = useAuth();
+  const location = useLocation();
   const [activeSession, setActiveSession] = useState<any | null>(null);
   const [anomalyCount, setAnomalyCount] = useState<number>(0);
   const [lowStockCount, setLowStockCount] = useState<number>(0);
@@ -56,6 +58,10 @@ const ProtectedLayout: React.FC<{ children: React.ReactNode; title: string; subt
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (!hasPathAccess(location.pathname, user?.role)) {
+    return <Navigate to={getFirstAllowedPath(user?.role)} replace />;
   }
 
   const isPosCashier = new URLSearchParams(window.location.search).get('posMode') === 'cashier';

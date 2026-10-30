@@ -17,6 +17,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { ROLE_ACCESS_BY_PATH } from '../role-permissions';
 
 interface SidebarProps {
   anomalyCount?: number;
@@ -29,7 +30,7 @@ interface NavItem {
   icon: LucideIcon;
   exact?: boolean;
   badgeKey?: 'stock' | 'anomaly';
-  roles?: string[]; // Si vide, accessible à tous
+  roles?: readonly string[]; // Si vide, accessible à tous
 }
 
 const navItems: NavItem[] = [
@@ -38,69 +39,69 @@ const navItems: NavItem[] = [
     label: 'Tableau de bord',
     icon: LayoutDashboard,
     exact: true,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'ACCOUNTANT', 'AUDITOR'],
+    roles: ROLE_ACCESS_BY_PATH['/'],
   },
   {
     to: '/sales',
     label: 'Caisse & Ventes (POS)',
     icon: ShoppingCart,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'CASHIER', 'SALES_REP'],
+    roles: ROLE_ACCESS_BY_PATH['/sales'],
   },
   {
     to: '/products',
     label: 'Produits & Stocks',
     icon: Package,
     badgeKey: 'stock',
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'INVENTORY_MANAGER', 'ACCOUNTANT'],
+    roles: ROLE_ACCESS_BY_PATH['/products'],
   },
   {
     to: '/invoices',
     label: 'Facturation & Devis',
     icon: Receipt,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'ACCOUNTANT', 'CASHIER'],
+    roles: ROLE_ACCESS_BY_PATH['/invoices'],
   },
   {
     to: '/finances',
     label: 'Trésorerie & Dépenses',
     icon: Wallet,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'ACCOUNTANT', 'CASHIER'],
+    roles: ROLE_ACCESS_BY_PATH['/finances'],
   },
   {
     to: '/customers',
     label: 'Clients',
     icon: Users,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'ACCOUNTANT', 'CASHIER', 'SALES_REP'],
+    roles: ROLE_ACCESS_BY_PATH['/customers'],
   },
   {
     to: '/suppliers',
     label: 'Fournisseurs',
     icon: Truck,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'ACCOUNTANT', 'INVENTORY_MANAGER', 'PURCHASER'],
+    roles: ROLE_ACCESS_BY_PATH['/suppliers'],
   },
   {
     to: '/anomalies',
     label: 'Audit & Anomalies',
     icon: ShieldAlert,
     badgeKey: 'anomaly',
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER', 'AUDITOR'],
+    roles: ROLE_ACCESS_BY_PATH['/anomalies'],
   },
   {
     to: '/users',
     label: 'Équipe & Rôles',
     icon: UserCheck,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER'],
+    roles: ROLE_ACCESS_BY_PATH['/users'],
   },
   {
     to: '/terminals',
     label: 'Postes & Contrôle Distant',
     icon: Monitor,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER', 'MANAGER'],
+    roles: ROLE_ACCESS_BY_PATH['/terminals'],
   },
   {
     to: '/settings',
     label: 'Paramètres PME',
     icon: Settings,
-    roles: ['SUPER_ADMIN', 'ORG_OWNER'],
+    roles: ROLE_ACCESS_BY_PATH['/settings'],
   },
 ];
 
